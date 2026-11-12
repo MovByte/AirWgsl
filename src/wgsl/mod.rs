@@ -264,12 +264,13 @@ pub fn lower_stage(
     })?;
     let bindings = desc.bindings.iter().find(|b| b.stage == stage);
     let used = used_args(m, fi);
-    let icx = io::Ctx { m, entry: &inp.entry, desc, host, bindings, varyings, used: &used };
+    let icx = io::Ctx { m, entry: &inp.entry, desc, host, bindings, varyings, used: &used, rules };
     let iface = io::lower(&icx, layout)?;
     let shared_device = stage != MetalStage::Vertex;
     let mem = Memory::analyze(m, fi, &inp.dl, &iface.regions, shared_device)?;
     let target = num::Target { rounding, host };
     let mut e = emit::FnEmit::new(m, fi, &inp.dl, mem, &analysis, rules, target, &iface, stage);
+    e.records = inp.entry.args.clone();
     e.prepare()?;
     if iface.early_fragment_tests
         && e.mem.regions.iter().any(|r| r.written && matches!(r.kind, RegionKind::Buffer { .. }))
@@ -287,6 +288,9 @@ pub fn lower_stage(
         }
     }
     let (body, behavior) = e.body(&structured)?;
+    for (name, wgsl_type, resource, source) in std::mem::take(&mut e.resources) {
+        layout.add_resource(crate::layout::ResourceVar { stage, name, wgsl_type, resource, source, binding: 0 });
+    }
     for p in &iface.prelude {
         e.prelude.require(p).map_err(|x| tracked::refuse("unregistered-lowering", *p, None, x.0))?;
     }

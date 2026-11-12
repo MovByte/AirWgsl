@@ -66,6 +66,10 @@ pub struct FnEmit<'a> {
     pub module_items: BTreeMap<String, String>,
     /// Derivatives are lowered (the module disables the derivative uniformity diagnostic, see [`super`]).
     pub derivatives: bool,
+    /// The entry point's argument records.
+    pub records: Vec<Option<super::entry::Record>>,
+    /// Bindings rules asked for: (name, WGSL type, resource, source).
+    pub resources: Vec<(String, String, crate::api::BindingResource, crate::api::BindingSource)>,
 }
 
 fn fmf(f: crate::ir::FastMath) -> num::FastMath {
@@ -217,6 +221,8 @@ impl<'a> FnEmit<'a> {
             enables: BTreeSet::new(),
             module_items: BTreeMap::new(),
             derivatives: false,
+            records: Vec::new(),
+            resources: Vec::new(),
         }
     }
 
@@ -1970,6 +1976,31 @@ impl RuleCx for FnEmit<'_> {
 
     fn module_item(&mut self, key: &str, text: String) {
         self.module_items.entry(key.to_string()).or_insert(text);
+    }
+
+    fn resource(
+        &mut self,
+        resource: crate::api::BindingResource,
+        source: crate::api::BindingSource,
+        wgsl_type: &str,
+    ) -> Result<String, Refusal> {
+        if matches!(source, crate::api::BindingSource::Uniforms(_) | crate::api::BindingSource::MetalBuffer { .. }) {
+            return Err(tracked::refuse(
+                "unregistered-lowering",
+                "binding",
+                None,
+                "buffers and the uniform block are bound by the memory model and the layout",
+            ));
+        }
+        let name = crate::layout::Layout::resource_name(self.stage, &source);
+        if !self.resources.iter().any(|r| r.0 == name) {
+            self.resources.push((name.clone(), wgsl_type.to_string(), resource, source));
+        }
+        Ok(name)
+    }
+
+    fn arg_record(&self, arg: u32) -> Option<super::entry::Record> {
+        self.records.get(arg as usize).cloned().flatten()
     }
 
     fn require_feature(&mut self, feature: &str) {

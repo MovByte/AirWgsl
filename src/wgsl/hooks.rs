@@ -12,9 +12,10 @@
 //! Registration is static: a package adds its rule set to [`registered`]. [`crate::wgsl::compile_with`] takes an
 //! explicit set (tests register their own).
 
-use crate::api::Refusal;
+use crate::api::{BindingResource, BindingSource, Refusal};
 use crate::ir::{InstId, Module, TypeId, Value};
 use crate::mem::access::Ptr;
+use crate::wgsl::entry::Record;
 
 /// How a call accesses memory through one of its pointer operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +62,16 @@ pub trait RuleCx {
     fn line(&mut self, s: String);
     /// A module-scope declaration, keyed so that it is emitted once.
     fn module_item(&mut self, key: &str, text: String);
+    /// A binding in the pipeline layout for a resource (texture, sampler, argument-buffer member) of the stage,
+    /// declared in the stage's module as `var NAME: wgsl_type`; returns NAME. One per source.
+    fn resource(
+        &mut self,
+        resource: BindingResource,
+        source: BindingSource,
+        wgsl_type: &str,
+    ) -> Result<String, Refusal>;
+    /// The entry-point record of an IR argument (texture type, access, sampler state, ...).
+    fn arg_record(&self, arg: u32) -> Option<Record>;
     /// A WebGPU feature the code needs.
     fn require_feature(&mut self, feature: &str);
     /// A WGSL `enable` directive the code needs.
@@ -74,6 +85,11 @@ pub trait CallRule: Send + Sync {
     /// The memory the call accesses through its pointer operands: (operand index, effect).
     fn effects(&self, _call: &CallSite<'_>) -> Vec<(usize, Effect)> {
         Vec::new()
+    }
+    /// Whether the rule lowers the uses of entry arguments of this record kind (`air.texture`, `air.sampler`): such
+    /// arguments become handles ([`RuleCx::handle_arg`]) instead of being refused by the stage interface.
+    fn claims_argument(&self, _kind: &str) -> bool {
+        false
     }
     /// Lower the call; returns the result's WGSL expression (in the result type's carrier), `None` for void.
     fn lower(&self, cx: &mut dyn RuleCx, call: &CallSite<'_>) -> Result<Option<String>, Refusal>;
@@ -93,6 +109,11 @@ impl Rules {
     pub fn with(mut self, rule: Box<dyn CallRule>) -> Rules {
         self.calls.push(rule);
         self
+    }
+
+    /// Whether a registered rule lowers uses of arguments of this record kind.
+    pub fn claims_argument(&self, kind: &str) -> bool {
+        self.calls.iter().any(|r| r.claims_argument(kind))
     }
 
     pub fn find(&self, name: &str) -> Option<&dyn CallRule> {

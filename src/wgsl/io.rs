@@ -296,6 +296,8 @@ pub struct Ctx<'a> {
     pub varyings: &'a Varyings,
     /// IR arguments that some instruction uses.
     pub used: &'a [bool],
+    /// The registered rules: an argument kind a rule claims becomes a handle for its calls.
+    pub rules: &'a super::hooks::Rules,
 }
 
 fn stage_refusal(m: &Module, fi: usize, what: &str, detail: &str) -> Refusal {
@@ -419,7 +421,7 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
                         words: Some(0),
                     },
                 );
-                if !unused {
+                if !unused && !cx.rules.claims_argument(kind) {
                     return Err(tracked::refuse(
                         "resource-argument",
                         kind.to_string(),

@@ -58,6 +58,19 @@ pub struct Layout {
     /// Stages that read the uniform block.
     uniform_stages: ShaderStages,
     buffers: Vec<BufferVar>,
+    resources: Vec<ResourceVar>,
+}
+
+/// A binding a lowering rule asked for (a texture, a sampler, an argument-buffer member).
+#[derive(Clone, Debug)]
+pub struct ResourceVar {
+    pub stage: MetalStage,
+    pub name: String,
+    /// The WGSL type of the variable (`texture_2d<f32>`, `sampler`, ...).
+    pub wgsl_type: String,
+    pub resource: BindingResource,
+    pub source: BindingSource,
+    pub binding: u32,
 }
 
 fn shader_stage(s: MetalStage) -> ShaderStage {
@@ -124,6 +137,33 @@ impl Layout {
         name
     }
 
+    /// The WGSL name of the binding variable for a resource source of `stage`.
+    pub fn resource_name(stage: MetalStage, source: &BindingSource) -> String {
+        let s = match stage {
+            MetalStage::Vertex => "v",
+            MetalStage::Fragment => "f",
+            MetalStage::Kernel => "k",
+            MetalStage::Tile => "t",
+        };
+        match source {
+            BindingSource::MetalTexture { index, .. } => format!("aw_t{}{}", s, index),
+            BindingSource::MetalSampler { index, .. } => format!("aw_s{}{}", s, index),
+            BindingSource::ArgumentBufferMember { buffer_index, argument_id, .. } => {
+                format!("aw_ab{}{}_{}", s, buffer_index, argument_id)
+            }
+            BindingSource::ConstantSampler { encoding } => format!("aw_cs{}{:x}", s, encoding),
+            BindingSource::MetalBuffer { index, .. } => format!("aw_rb{}{}", s, index),
+            BindingSource::Uniforms(_) => format!("aw_ru{}", s),
+        }
+    }
+
+    /// Add a binding a rule asked for, once per (stage, source).
+    pub fn add_resource(&mut self, r: ResourceVar) {
+        if !self.resources.iter().any(|x| x.stage == r.stage && x.source == r.source) {
+            self.resources.push(r);
+        }
+    }
+
     /// Record how a variable is accessed (after the stage's memory analysis).
     pub fn note_access(&mut self, name: &str, written: bool, atomic: bool) {
         if let Some(b) = self.buffers.iter_mut().find(|b| b.name == name) {
@@ -141,6 +181,11 @@ impl Layout {
         self.buffers.sort_by_key(|b| (b.stage, b.slots[0]));
         for (i, b) in self.buffers.iter_mut().enumerate() {
             b.binding = i as u32;
+        }
+        let first = self.buffers.len() as u32;
+        self.resources.sort_by_key(|r| r.stage);
+        for (i, r) in self.resources.iter_mut().enumerate() {
+            r.binding = first + i as u32;
         }
         let mut per_stage: BTreeMap<MetalStage, u64> = BTreeMap::new();
         for b in &self.buffers {
@@ -210,6 +255,12 @@ impl Layout {
                 RESOURCE_GROUP, b.binding, access, b.name, elem
             ));
         }
+        for r in self.resources.iter().filter(|r| r.stage == stage) {
+            out.push_str(&format!(
+                "@group({}) @binding({}) var {}: {};\n",
+                RESOURCE_GROUP, r.binding, r.name, r.wgsl_type
+            ));
+        }
         out
     }
 
@@ -234,8 +285,8 @@ impl Layout {
                 }],
             });
         }
-        if !self.buffers.is_empty() {
-            let entries = self
+        if !self.buffers.is_empty() || !self.resources.is_empty() {
+            let mut entries: Vec<BindingEntry> = self
                 .buffers
                 .iter()
                 .map(|b| BindingEntry {
@@ -254,6 +305,12 @@ impl Layout {
                     source: BindingSource::MetalBuffer { stage: b.stage, index: b.slots[0] },
                 })
                 .collect();
+            entries.extend(self.resources.iter().map(|r| BindingEntry {
+                binding: r.binding,
+                visibility: ShaderStages::from(shader_stage(r.stage)),
+                resource: r.resource.clone(),
+                source: r.source.clone(),
+            }));
             groups.push(BindGroupLayout { group: RESOURCE_GROUP, entries });
         }
         BindingLayout { groups }
