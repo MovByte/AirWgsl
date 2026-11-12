@@ -440,7 +440,7 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
                 "non-uniform-dispatch",
                 "dispatchThreads",
                 loc(m, fi),
-                "WGSL dispatches whole workgroups; the edge guard is the stage-interface lowering's",
+                "the A10X does not support nonuniform threadgroup sizes (D1 supportsNonUniformThreadgroupSize = false)",
             ));
         }
         let total: u64 = c.threads_per_threadgroup.iter().product();

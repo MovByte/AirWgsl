@@ -196,10 +196,11 @@ pub const ITEMS: &[Item] = &[
     },
     Item {
         id: "non-uniform-dispatch",
-        owner: Some("S6b"),
-        kind: RefusalKind::NotImplemented,
-        summary: "a dispatch whose grid is not a multiple of the threadgroup size (dispatchThreads:)",
-        reference: "plan 5.7; S6b non-uniform dispatch guard",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a dispatch whose grid is not a multiple of the threadgroup size (dispatchThreads:): the A10X reports \
+                  supportsNonUniformThreadgroupSize = false",
+        reference: "D1 profile; Metal feature set tables (nonuniform threadgroup size from Apple4)",
     },
     Item {
         id: "framebuffer-fetch",
