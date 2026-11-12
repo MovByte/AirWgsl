@@ -55,6 +55,8 @@ pub struct Interface {
     pub early_fragment_tests: bool,
     /// WebGPU features stage rules need.
     pub features: Vec<String>,
+    /// Module-scope items stage rules declared, by key.
+    pub module_items: BTreeMap<String, String>,
 }
 
 /// The record key an argument's role comes from, which stage rules and resource rules claim kinds by.
@@ -672,21 +674,20 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
             role => return Err(role_refusal(m, fi, role)),
         }
     }
-    let p = &mut it.params;
-    for (on, decl) in [
-        (gid, "@builtin(global_invocation_id) aw_gid: vec3<u32>"),
-        (lid, "@builtin(local_invocation_id) aw_lid: vec3<u32>"),
-        (wid, "@builtin(workgroup_id) aw_wid: vec3<u32>"),
-        (nwg, "@builtin(num_workgroups) aw_nwg: vec3<u32>"),
-        (lidx, "@builtin(local_invocation_index) aw_lidx: u32"),
-        (vid, "@builtin(vertex_index) aw_vid: u32"),
-        (iid, "@builtin(instance_index) aw_iid: u32"),
-        (pos, "@builtin(position) aw_pos: vec4<f32>"),
-        (ff, "@builtin(front_facing) aw_ff: bool"),
-        (sid, "@builtin(sample_index) aw_sid: u32"),
+    for (on, b, ty) in [
+        (gid, "global_invocation_id", "vec3<u32>"),
+        (lid, "local_invocation_id", "vec3<u32>"),
+        (wid, "workgroup_id", "vec3<u32>"),
+        (nwg, "num_workgroups", "vec3<u32>"),
+        (lidx, "local_invocation_index", "u32"),
+        (vid, "vertex_index", "u32"),
+        (iid, "instance_index", "u32"),
+        (pos, "position", "vec4<f32>"),
+        (ff, "front_facing", "bool"),
+        (sid, "sample_index", "u32"),
     ] {
         if on {
-            p.push(decl.to_string());
+            builtin_param(&mut it, b, ty);
         }
     }
     it.early_fragment_tests = e.early_fragment_tests;
@@ -877,6 +878,33 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
     Ok(())
 }
 
+/// The entry parameter's name for a WGSL built-in input.
+fn builtin_name(builtin: &str) -> String {
+    match builtin {
+        "global_invocation_id" => "aw_gid".into(),
+        "local_invocation_id" => "aw_lid".into(),
+        "workgroup_id" => "aw_wid".into(),
+        "num_workgroups" => "aw_nwg".into(),
+        "local_invocation_index" => "aw_lidx".into(),
+        "vertex_index" => "aw_vid".into(),
+        "instance_index" => "aw_iid".into(),
+        "position" => "aw_pos".into(),
+        "front_facing" => "aw_ff".into(),
+        "sample_index" => "aw_sid".into(),
+        other => format!("aw_{}", other),
+    }
+}
+
+/// Declare a built-in input parameter once; returns its name.
+fn builtin_param(it: &mut Interface, builtin: &str, wgsl_type: &str) -> String {
+    let name = builtin_name(builtin);
+    let decl = format!("@builtin({}) {}: {}", builtin, name, wgsl_type);
+    if !it.params.contains(&decl) {
+        it.params.push(decl);
+    }
+    name
+}
+
 /// The stage rules' view of an interface being lowered.
 struct StageCtx<'a, 'b> {
     cx: &'a Ctx<'b>,
@@ -947,5 +975,42 @@ impl super::hooks::StageCx for StageCtx<'_, '_> {
 
     fn require_feature(&mut self, feature: &str) {
         self.it.features.push(feature.to_string());
+    }
+
+    fn entry(&self) -> &EntryPoint {
+        self.cx.entry
+    }
+
+    fn host(&self) -> &HostCaps {
+        self.cx.host
+    }
+
+    fn builtin(&mut self, builtin: &str, wgsl_type: &str) -> String {
+        builtin_param(self.it, builtin, wgsl_type)
+    }
+
+    fn uniform_words(&mut self, value: UniformValue) -> Vec<String> {
+        self.layout.uniform_words(self.cx.stage, value)
+    }
+
+    fn buffer(&mut self, index: u64) -> Result<(String, String), Refusal> {
+        let stage = self.cx.stage;
+        let var = self.layout.buffer(stage, index, self.cx.bindings);
+        let base = self.layout.uniform(stage, UniformValue::ResidualOffset { stage, index });
+        Ok((var, base))
+    }
+
+    fn prologue(&mut self, statement: String) {
+        self.it.prologue.push(statement);
+    }
+
+    fn module_item(&mut self, key: &str, text: String) {
+        self.it.module_items.entry(key.to_string()).or_insert(text);
+    }
+
+    fn enable(&mut self, extension: &str) {
+        if !self.it.enables.iter().any(|e| e == extension) {
+            self.it.enables.push(extension.to_string());
+        }
     }
 }

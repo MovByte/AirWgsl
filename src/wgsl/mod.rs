@@ -304,6 +304,7 @@ pub fn lower_stage(
     let mut e = emit::FnEmit::new(m, fi, &inp.dl, mem, &analysis, rules, target, &iface, stage);
     e.records = inp.entry.arguments.clone();
     e.bindings = bindings.cloned();
+    e.desc = Some(desc);
     e.prepare()?;
     if iface.early_fragment_tests
         && e.mem.regions.iter().any(|r| r.written && matches!(r.kind, RegionKind::Buffer { .. }))
@@ -381,7 +382,7 @@ pub fn lower_stage(
     // pipeline-wide); a marker line keeps their place.
     out.push_str("//@aw:bindings\n");
     out.push_str(&module_vars);
-    for t in e.module_items.values() {
+    for t in e.module_items.values().chain(iface.module_items.values()) {
         out.push_str(t);
         out.push('\n');
     }

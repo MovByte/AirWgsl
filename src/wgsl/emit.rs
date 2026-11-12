@@ -76,6 +76,8 @@ pub struct FnEmit<'a> {
     pub resources: Vec<(String, String, crate::api::BindingResource, crate::api::BindingSource)>,
     /// What the pipeline description binds to the stage.
     pub bindings: Option<crate::api::StageBindings>,
+    /// The pipeline state, when the function is lowered as a pipeline stage.
+    pub desc: Option<&'a crate::api::PipelineDesc>,
 }
 
 fn fmf(f: crate::ir::FastMath) -> num::FastMath {
@@ -231,6 +233,7 @@ impl<'a> FnEmit<'a> {
             records: Vec::new(),
             resources: Vec::new(),
             bindings: None,
+            desc: None,
         }
     }
 
@@ -2045,5 +2048,9 @@ impl RuleCx for FnEmit<'_> {
 
     fn derivatives(&mut self) {
         self.derivatives = true;
+    }
+
+    fn desc(&self) -> Option<&crate::api::PipelineDesc> {
+        self.desc
     }
 }

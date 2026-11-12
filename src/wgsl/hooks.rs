@@ -16,7 +16,7 @@
 //! Registration is static: a package adds its rule set to [`registered`]. [`crate::wgsl::compile_with`] takes an
 //! explicit set (tests register their own).
 
-use crate::air::{Argument, Output};
+use crate::air::{Argument, EntryPoint, Output};
 use crate::api::{
     BindingResource, BindingSource, HostCaps, MetalStage, PipelineDesc, Refusal, StageBindings, UniformValue,
 };
@@ -95,6 +95,10 @@ pub trait RuleCx {
     /// The code takes implicit derivatives (implicit-LOD sampling): the module is treated as the derivative functions'
     /// modules are (see [`crate::wgsl`]).
     fn derivatives(&mut self);
+    /// The pipeline state, when the function is lowered as a pipeline stage.
+    fn desc(&self) -> Option<&PipelineDesc> {
+        None
+    }
 }
 
 /// A rule lowering calls of some `air.*` functions.
@@ -149,6 +153,25 @@ pub trait StageCx {
     fn prelude(&mut self, item: &'static str);
     /// A WebGPU feature the code needs.
     fn require_feature(&mut self, feature: &str);
+    /// The entry point's records (every argument and output).
+    fn entry(&self) -> &EntryPoint;
+    /// The features and limits of the host.
+    fn host(&self) -> &HostCaps;
+    /// A WGSL built-in input of the entry point (`vertex_index`, `instance_index`, `sample_index`, ...), declared
+    /// once however many rules and direct mappings use it; returns the parameter's name.
+    fn builtin(&mut self, builtin: &str, wgsl_type: &str) -> String;
+    /// The WGSL expressions (each a `u32`) of the words of a uniform field ([`UniformValue::words`]).
+    fn uniform_words(&mut self, value: UniformValue) -> Vec<String>;
+    /// The storage variable serving the stage's Metal buffer `index` (an `array<u32>` of the bound buffer's words from
+    /// the binding's aligned base, shared with the memory model's view of the same slot), and the WGSL expression (a
+    /// `u32`) of the byte at which the Metal binding offset falls in it.
+    fn buffer(&mut self, index: u64) -> Result<(String, String), Refusal>;
+    /// A statement of the entry function, after the arguments' bindings and before the body.
+    fn prologue(&mut self, statement: String);
+    /// A module-scope declaration, keyed so that it is emitted once.
+    fn module_item(&mut self, key: &str, text: String);
+    /// A WGSL `enable` directive the code needs.
+    fn enable(&mut self, extension: &str);
 }
 
 /// How a returned value becomes a stage output.
