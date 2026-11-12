@@ -1,0 +1,42 @@
+# Pinned specification sources. Every citation in the tables names one of these ids.
+# A source whose bytes no longer hash to the pin is refused by the generator and the
+# checker, so a new published version is adopted only by updating its pin here.
+
+[source.msl]
+title = "Metal Shading Language Specification"
+publisher = "Apple Inc."
+version = "4.1"
+date = "2026-06-04"
+url = "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
+sha256 = "41538b30d2f1140a5b2a0c84ce0a9f7b67bf0c707e224cfea0bfe5a44aa26cf5"
+kind = "pdf"
+
+[source.wgsl]
+title = "WebGPU Shading Language"
+publisher = "W3C"
+version = "Candidate Recommendation Draft"
+date = "2026-11-06"
+url = "https://www.w3.org/TR/2026/CRD-WGSL-20261106/"
+sha256 = "c7b8cc9d175f6f785ff9e29c28bc7c83334bd3338878e62a020e79e5c5be259d"
+kind = "html"
+
+[source.webgpu]
+title = "WebGPU"
+publisher = "W3C"
+version = "Candidate Recommendation Draft"
+date = "2026-09-15"
+url = "https://www.w3.org/TR/2026/CRD-webgpu-20260915/"
+sha256 = "7c67681430753937fd878fcbab9c2f0e93d757bdc24de6f3789ea0ff6c6f2438"
+kind = "html"
+
+# Apple's published family tables; a cross-check only. Device capabilities of the
+# target come from the D1 device profile, which reads them from the 21H461 binaries.
+[source.mfst]
+title = "Metal Feature Set Tables"
+publisher = "Apple Inc."
+version = "October 23, 2026"
+date = "2026-10-23"
+url = "https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf"
+sections = false
+sha256 = "1ef9b5528c7d008013ea1effbc4b449dc407dff684d038a602d9b7a6dac9eaa2"
+kind = "pdf"

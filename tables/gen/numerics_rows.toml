@@ -1,0 +1,707 @@
+# One row per MSL floating-point builtin and operator. gen_numerics.py fills in the
+# accuracy cells verbatim from MSL Tables 8.1-8.3 (labels t81, t82, t83) and from the
+# WGSL accuracy table (label wgsl), and adds the generic decisions for precise math and
+# half precision. The fast-math single-precision decision is stated here with the
+# comparison that supports it, under the rules in [rules] of numerics.toml.
+#
+# Decisions: native = the WGSL operation's stated accuracy is at least as tight as
+# MSL's over MSL's domain; polyfill = emit an implementation whose accuracy meets the
+# MSL bound (S5 owns its error analysis); soft-float = the integer IEEE library.
+
+[[row]]
+id = "add"
+msl = "x + y"
+def = { src = "msl", ref = "3.1", quote = "The arithmetic binary operators, add (+), subtract (–), multiply (*) and divide (/), act upon scalar and vector, integer, and floating-point data type operands." }
+t81 = "x + y"
+t82 = "x + y"
+t83 = "x + y"
+wgsl = "x + y"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Both texts say correctly rounded, but MSL allows only round-to-nearest-even or round-toward-zero (8.2) while WGSL allows rounding up or down (15.7.4), so a native WGSL addition may return a value MSL does not allow. Exact only through integer soft-float in round-to-nearest-even."
+
+[[row]]
+id = "sub"
+msl = "x - y"
+def = { src = "msl", ref = "3.1", quote = "The arithmetic binary operators, add (+), subtract (–), multiply (*) and divide (/), act upon scalar and vector, integer, and floating-point data type operands." }
+t81 = "x - y"
+t82 = "x - y"
+t83 = "x - y"
+wgsl = "x - y"
+fast_f32 = "polyfill"
+fast_f32_analysis = "As for x + y: WGSL's correctly rounded result may round in a direction MSL's rounding modes do not allow (8.2 versus 15.7.4)."
+
+[[row]]
+id = "mul"
+msl = "x * y"
+def = { src = "msl", ref = "3.1", quote = "The arithmetic binary operators, add (+), subtract (–), multiply (*) and divide (/), act upon scalar and vector, integer, and floating-point data type operands." }
+t81 = "x * y"
+t82 = "x * y"
+t83 = "x * y"
+wgsl = "x * y"
+fast_f32 = "polyfill"
+fast_f32_analysis = "As for x + y: WGSL's correctly rounded result may round in a direction MSL's rounding modes do not allow (8.2 versus 15.7.4)."
+
+[[row]]
+id = "recip"
+msl = "1.0 / x"
+def = { src = "msl", ref = "3.1", quote = "The arithmetic binary operators, add (+), subtract (–), multiply (*) and divide (/), act upon scalar and vector, integer, and floating-point data type operands." }
+t81 = "1.0 / x"
+t82 = "1.0 / x"
+t83 = "1.0 / x"
+wgsl = "x / y"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 1 ulp for x in [2^-126, 2^126]. WGSL has only division, at most 2.5 ULP: looser."
+
+[[row]]
+id = "div"
+msl = "x / y"
+def = { src = "msl", ref = "3.1", quote = "The arithmetic binary operators, add (+), subtract (–), multiply (*) and divide (/), act upon scalar and vector, integer, and floating-point data type operands." }
+t81 = "x / y"
+t82 = "x / y"
+t83 = "x / y"
+wgsl = "x / y"
+fast_f32 = "native"
+fast_f32_analysis = "MSL: at most 2.5 ulp for y in [2^-126, 2^126]. WGSL: 2.5 ULP for |y| in [2^-126, 2^126], which contains MSL's domain. Equal bound."
+
+[[row]]
+id = "acos"
+msl = "acos"
+def = { src = "msl", ref = "6.6", quote = "T acos(T x) Compute arc cosine of x." }
+t81 = "acos"
+t82 = "acos(x)"
+t83 = "acos(x)"
+wgsl = "acos(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 5 ulp on [-1, 1]. WGSL: the worse of an absolute error of 6.77e-5 and the atan2-based formula, which is far looser than 5 ulp for small results."
+
+[[row]]
+id = "acosh"
+msl = "acosh"
+def = { src = "msl", ref = "6.6", quote = "T acosh(T x) Compute inverse hyperbolic cosine of x." }
+t81 = "acosh"
+t82 = "acosh(x)"
+t83 = "acosh(x)"
+wgsl = "acosh(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Both define acosh as log(x + sqrt(x*x - 1)), but MSL's sqrt is x * rsqrt(x) (rsqrt at most 2 ulp) while WGSL's sqrt inherits from 1.0 / inverseSqrt(x) (2 ULP plus a 2.5 ULP division): looser. Evaluate MSL's formula with the sqrt polyfill."
+
+[[row]]
+id = "asin"
+msl = "asin"
+def = { src = "msl", ref = "6.6", quote = "T asin(T x) Compute arc sine function of x." }
+t81 = "asin"
+t82 = "asin(x)"
+t83 = "asin(x)"
+wgsl = "asin(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 5 ulp on [-1, 1] with |x| >= 2^-125. WGSL: the worse of an absolute error of 6.81e-5 and an atan2-based formula: looser."
+
+[[row]]
+id = "asinh"
+msl = "asinh"
+def = { src = "msl", ref = "6.6", quote = "T asinh(T x) Compute inverse hyperbolic sine of x." }
+t81 = "asinh"
+t82 = "asinh(x)"
+t83 = "asinh(x)"
+wgsl = "asinh(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Same formula in both, log(x + sqrt(x*x + 1)); WGSL's sqrt is looser than MSL's x * rsqrt(x) (see acosh)."
+
+[[row]]
+id = "atan"
+msl = "atan"
+def = { src = "msl", ref = "6.6", quote = "T atan(T y_over_x) Compute arc tangent of x." }
+t81 = "atan"
+t82 = "atan(x)"
+t83 = "atan(x)"
+wgsl = "atan(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 5 ulp. WGSL: 4096 ULP."
+
+[[row]]
+id = "atan2"
+msl = "atan2"
+def = { src = "msl", ref = "6.6", quote = "T atan2(T y, T x) Compute arc tangent of y over x." }
+t81 = "atan2"
+t82 = "atan2(y, x)"
+t83 = "atan2(y, x)"
+wgsl = "atan2(y, x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL defines fast atan2 by cases on atan(y / x) (5 ulp) and a division (2.5 ulp), undefined when x or y is 0. WGSL: 4096 ULP. Evaluate MSL's case formula with the atan polyfill."
+
+[[row]]
+id = "atanh"
+msl = "atanh"
+def = { src = "msl", ref = "6.6", quote = "T atanh(T x) Compute hyperbolic arc tangent of x." }
+t81 = "atanh"
+t82 = "atanh(x)"
+t83 = "atanh(x)"
+wgsl = "atanh(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Both define atanh as 0.5 times log((1 + x) / (1 - x)) (the factor 0.5 is exact). The components have equal stated bounds: WGSL log (2^-21 absolute on [0.5, 2], 3 ULP elsewhere) equals MSL fast log, WGSL division (2.5 ULP) equals MSL fast division, and add/subtract carry the same magnitude bound below 1 ulp under rule R3."
+
+[[row]]
+id = "ceil"
+msl = "ceil"
+def = { src = "msl", ref = "6.6", quote = "T ceil(T x) Round x to integral value using the round to positive infinity rounding mode." }
+t81 = "ceil"
+t82 = "ceil"
+t83 = "ceil"
+wgsl = "ceil(x)"
+fast_f32 = "native"
+fast_f32_analysis = "The exact result is always representable, so a correctly rounded result in either text is the exact value (rule R2)."
+
+[[row]]
+id = "copysign"
+msl = "copysign"
+def = { src = "msl", ref = "6.6", quote = "T copysign(T x, T y) Return x with its sign changed to match the sign of y." }
+t81 = "copysign"
+t82 = "copysign"
+t83 = "copysign"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: 0 ulp. WGSL has no copysign; the polyfill is a bit operation on the bitcast values, which is exact."
+
+[[row]]
+id = "cos"
+msl = "cos"
+def = { src = "msl", ref = "6.6", quote = "T cos(T x) Compute cosine of x." }
+t81 = "cos"
+t82 = "cos(x)"
+t83 = "cos(x)"
+wgsl = "cos(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: absolute error at most 2^-13 on [-pi, pi]. WGSL: at most 2^-11 on [-pi, pi]: looser."
+
+[[row]]
+id = "cosh"
+msl = "cosh"
+def = { src = "msl", ref = "6.6", quote = "T cosh(T x) Compute hyperbolic cosine of x." }
+t81 = "cosh"
+t82 = "cosh(x)"
+t83 = "cosh(x)"
+wgsl = "cosh(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Same formula, 0.5 * (exp(x) + exp(-x)); WGSL exp (3 + 2|x| ULP) is looser than MSL fast exp (3 + floor(|2x|) ulp)."
+
+[[row]]
+id = "cospi"
+msl = "cospi"
+def = { src = "msl", ref = "6.6", quote = "T cospi(T x) Compute cos(πx)." }
+t81 = "cospi"
+t82 = "cospi(x)"
+t83 = "cospi(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: absolute error at most 2^-13 on [-1, 1]. WGSL has no cospi."
+
+[[row]]
+id = "divide"
+msl = "divide"
+def = { src = "msl", ref = "6.6", quote = "T divide(T x, T y) Compute x / y." }
+wgsl = "x / y"
+fast_f32 = "native"
+fast_f32_analysis = "divide is defined as x / y; it has the x / y row's bounds (at most 2.5 ulp fast), which WGSL division meets."
+
+[[row]]
+id = "exp"
+msl = "exp"
+def = { src = "msl", ref = "6.6", quote = "T exp(T x) Exponential base e function." }
+t81 = "exp"
+t82 = "exp(x)"
+t83 = "exp(x)"
+wgsl = "exp(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 3 + floor(|2x|) ulp. WGSL: 3 + 2|x| ULP, larger whenever 2|x| is not an integer."
+
+[[row]]
+id = "exp2"
+msl = "exp2"
+def = { src = "msl", ref = "6.6", quote = "T exp2(T x) Exponential base 2 function." }
+t81 = "exp2"
+t82 = "exp2(x)"
+t83 = "exp2(x)"
+wgsl = "exp2(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: at most 3 + floor(|2x|) ulp. WGSL: 3 + 2|x| ULP: looser."
+
+[[row]]
+id = "exp10"
+msl = "exp10"
+def = { src = "msl", ref = "6.6", quote = "T exp10(T x) Exponential base 10 function." }
+t81 = "exp10"
+t82 = "exp10(x)"
+t83 = "exp10(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL defines fast exp10 as exp2(x * log2(10)); WGSL has no exp10. Evaluate the formula with the exp2 polyfill."
+
+[[row]]
+id = "fabs"
+msl = "fabs"
+def = { src = "msl", ref = "6.6", quote = "T fabs(T x) T abs(T x) Compute absolute value of a floating-point number." }
+t81 = "fabs"
+t82 = "fabs"
+t83 = "fabs"
+wgsl = "abs(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact in both (rule R2)."
+
+[[row]]
+id = "fdim"
+msl = "fdim"
+def = { src = "msl", ref = "6.6", quote = "T fdim(T x, T y) x – y if x > y; +0 if x <= y." }
+t81 = "fdim"
+t82 = "fdim"
+t83 = "fdim"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: correctly rounded x - y, so it carries the rounding-direction requirement of x - y. WGSL has no fdim."
+
+[[row]]
+id = "floor"
+msl = "floor"
+def = { src = "msl", ref = "6.6", quote = "T floor(T x) Round x to integral value using the round to negative infinity rounding mode." }
+t81 = "floor"
+t82 = "floor"
+t83 = "floor"
+wgsl = "floor(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact in both (rule R2)."
+
+[[row]]
+id = "fma"
+msl = "fma"
+def = { src = "msl", ref = "6.6", quote = "T fma(T a, T b, T c) Returns the correctly rounded floating-point representation of the sum of c with the infinitely precise product of a and b. Rounding of intermediate products shall not occur." }
+t81 = "fma"
+t82 = "fma"
+t83 = "fma"
+wgsl = "fma(x, y, z)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL requires a single rounding. WGSL's fma inherits from x * y + z, which may round twice."
+
+[[row]]
+id = "fmax"
+msl = "fmax"
+def = { src = "msl", ref = "6.6", quote = "Returns y if x < y, otherwise returns x. If one argument is a NaN, fmax() returns the other argument." }
+t81 = "fmax"
+t82 = "fmax"
+t83 = "fmax"
+wgsl = "max(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact selection in both; NaN arguments are undefined under fast math (8.1); with two subnormal arguments MSL allows either value when denormals are unsupported, as WGSL does."
+
+[[row]]
+id = "fmin"
+msl = "fmin"
+def = { src = "msl", ref = "6.6", quote = "Returns y if y < x, otherwise it returns x." }
+t81 = "fmin"
+t82 = "fmin"
+t83 = "fmin"
+wgsl = "min(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "As for fmax."
+
+[[row]]
+id = "fmax3"
+msl = "fmax3"
+def = { src = "msl", ref = "6.6", quote = "T fmax3(T x, T y, T z)" }
+wgsl = "max(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "Defined by composing fmax; exact selections, so nested WGSL max is exact."
+
+[[row]]
+id = "fmin3"
+msl = "fmin3"
+def = { src = "msl", ref = "6.6", quote = "Returns fmin(x, fmin(y, z))." }
+wgsl = "min(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "Defined as fmin(x, fmin(y, z)); exact selections."
+
+[[row]]
+id = "fmedian3"
+msl = "fmedian3"
+def = { src = "msl", ref = "6.6", quote = "Returns the middle value of x, y, and z." }
+wgsl = "clamp(x,low,high)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "An exact selection, but MSL's NaN rules (treat NaN as missing data) differ from WGSL clamp's median formulation and WGSL has no median; the polyfill is a compare-and-select network, exact."
+
+[[row]]
+id = "fmod"
+msl = "fmod"
+def = { src = "msl", ref = "6.6", quote = "T fmod(T x, T y) Returns x – y * trunc(x/y)." }
+t81 = "fmod"
+t82 = "fmod"
+t83 = "fmod"
+wgsl = "x % y"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states the fast-math accuracy of fmod as undefined, so any result conforms; WGSL x % y (inherited from x - y * trunc(x/y)) is MSL's defining formula."
+
+[[row]]
+id = "fract"
+msl = "fract"
+def = { src = "msl", ref = "6.6", quote = "T fract(T x) Returns the fractional part of x that is greater than or equal to 0 or less than 1." }
+t81 = "fract"
+t82 = "fract"
+t83 = "fract"
+wgsl = "fract(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: correctly rounded and less than 1. WGSL inherits from x - floor(x), whose subtraction may round in a direction MSL forbids and may round up to 1.0 for tiny negative x."
+
+[[row]]
+id = "frexp"
+msl = "frexp"
+def = { src = "msl", ref = "6.6", quote = "component the mantissa returned is a float with magnitude in the interval [1/2, 1) or 0." }
+t81 = "frexp"
+t82 = "frexp"
+t83 = "frexp"
+wgsl = "frexp(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact for zero and normal inputs in both; subnormal inputs may be flushed under MSL 8.1."
+
+[[row]]
+id = "ilogb"
+msl = "ilogb"
+def = { src = "msl", ref = "6.6", quote = "Ti ilogb(T x) Return the exponent as an integer value." }
+t81 = "ilogb"
+t82 = "ilogb"
+t83 = "ilogb"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: 0 ulp. WGSL has no ilogb; extract the exponent field with integer operations (exact)."
+
+[[row]]
+id = "ldexp"
+msl = "ldexp"
+def = { src = "msl", ref = "6.6", quote = "T ldexp(T x, Ti k) Multiply x by 2 to the power k." }
+t81 = "ldexp"
+t82 = "ldexp"
+t83 = "ldexp"
+wgsl = "ldexp(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "The exact result is representable unless it is subnormal, and subnormal results may be flushed under both texts (MSL 8.1, WGSL 15.7.2)."
+
+[[row]]
+id = "log"
+msl = "log"
+def = { src = "msl", ref = "6.6", quote = "T log(T x) Compute the natural logarithm of x." }
+t81 = "log"
+t82 = "log(x)"
+t83 = "log(x)"
+wgsl = "log(x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL: absolute error at most 2^-21 on [0.5, 2], otherwise at most 3 ulp for x > 0. WGSL: the same two bounds."
+
+[[row]]
+id = "log2"
+msl = "log2"
+def = { src = "msl", ref = "6.6", quote = "T log2(T x) Compute the base 2 logarithm of x." }
+t81 = "log2"
+t82 = "log2(x)"
+t83 = "log2(x)"
+wgsl = "log2(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: absolute error at most 2^-22 on [0.5, 2], otherwise at most 2 ulp. WGSL: 2^-21 and 3 ULP: looser."
+
+[[row]]
+id = "log10"
+msl = "log10"
+def = { src = "msl", ref = "6.6", quote = "T log10(T x) Compute the base 10 logarithm of x." }
+t81 = "log10"
+t82 = "log10(x)"
+t83 = "log10(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL defines fast log10 as log2(x) * log10(2); WGSL has no log10. Evaluate with the log2 polyfill."
+
+[[row]]
+id = "modf"
+msl = "modf"
+def = { src = "msl", ref = "6.6", quote = "T modf(T x, T &intval) Decompose a floating-point number." }
+t81 = "modf"
+t82 = "modf"
+t83 = "modf"
+wgsl = "modf(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Both parts are exactly representable (rule R2)."
+
+[[row]]
+id = "nextafter"
+msl = "nextafter"
+def = { src = "msl", ref = "6.6", quote = "Return next representable floating-point value after x in the direction of y." }
+t81 = "nextafter"
+t83 = "nextafter"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: 0 ulp. WGSL has no nextafter; integer increment of the bit pattern is exact."
+
+[[row]]
+id = "pow"
+msl = "pow"
+def = { src = "msl", ref = "6.6", quote = "T pow(T x, T y)" }
+t81 = "pow"
+t82 = "pow(x, y)"
+wgsl = "pow(x, y)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Same formula, exp2(y * log2(x)), but WGSL's exp2 and log2 are looser than MSL's fast exp2 and log2."
+
+[[row]]
+id = "powr"
+msl = "powr"
+def = { src = "msl", ref = "6.6", quote = "T powr(T x, T y) Compute x to the power y, where x is >= 0." }
+t81 = "powr"
+t82 = "powr(x, y)"
+wgsl = "pow(x, y)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "As for pow."
+
+[[row]]
+id = "rint"
+msl = "rint"
+def = { src = "msl", ref = "6.6", quote = "T rint(T x) Round x to integral value using round ties to even rounding mode in floating-point format." }
+t81 = "rint"
+t82 = "rint"
+t83 = "rint"
+wgsl = "round(x)"
+fast_f32 = "native"
+fast_f32_analysis = "WGSL round rounds halfway cases to even, which is rint; the result is exact (rule R2)."
+wgsl_def = { src = "wgsl", ref = "#round-builtin", quote = "When e lies halfway between integers k and k + 1, the result is k when k is even, and k + 1 when k is odd." }
+
+[[row]]
+id = "round"
+msl = "round"
+def = { src = "msl", ref = "6.6", quote = "T round(T x) Return the integral value nearest to x, rounding halfway cases away from zero." }
+t81 = "round"
+t82 = "round(x)"
+t83 = "round(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL rounds halfway cases away from zero; WGSL round rounds them to even, a different function. The polyfill (trunc plus an exact halfway test) is exact."
+wgsl_def = { src = "wgsl", ref = "#round-builtin", quote = "When e lies halfway between integers k and k + 1, the result is k when k is even, and k + 1 when k is odd." }
+
+[[row]]
+id = "rsqrt"
+msl = "rsqrt"
+def = { src = "msl", ref = "6.6", quote = "T rsqrt(T x) Compute inverse square root of x." }
+t81 = "rsqrt"
+t82 = "rsqrt"
+t83 = "rsqrt"
+wgsl = "inverseSqrt(x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL fast: at most 2 ulp. WGSL: 2 ULP."
+
+[[row]]
+id = "sin"
+msl = "sin"
+def = { src = "msl", ref = "6.6", quote = "T sin(T x) Compute sine of x." }
+t81 = "sin"
+t82 = "sin(x)"
+t83 = "sin(x)"
+wgsl = "sin(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: absolute error at most 2^-13 on [-pi, pi]. WGSL: 2^-11: looser."
+
+[[row]]
+id = "sincos"
+msl = "sincos"
+def = { src = "msl", ref = "6.6", quote = "T sincos(T x, T &cosval) Compute sine and cosine of x." }
+t81 = "sincos"
+t82 = "sincos(x)"
+t83 = "sincos(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL gives sincos the bounds of sin and cos, both of which need the polyfill."
+
+[[row]]
+id = "sinh"
+msl = "sinh"
+def = { src = "msl", ref = "6.6", quote = "T sinh(T x) Compute hyperbolic sine of x." }
+t81 = "sinh"
+t82 = "sinh(x)"
+t83 = "sinh(x)"
+wgsl = "sinh(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "Same formula, 0.5 * (exp(x) - exp(-x)); WGSL exp is looser than MSL fast exp."
+
+[[row]]
+id = "sinpi"
+msl = "sinpi"
+def = { src = "msl", ref = "6.6", quote = "T sinpi(T x) Compute sin(πx)." }
+t81 = "sinpi"
+t82 = "sinpi(x)"
+t83 = "sinpi(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL: absolute error at most 2^-13 on [-1, 1]. WGSL has no sinpi."
+
+[[row]]
+id = "sqrt"
+msl = "sqrt"
+def = { src = "msl", ref = "6.6", quote = "T sqrt(T x) Compute square root of x." }
+t81 = "sqrt"
+t82 = "sqrt(x)"
+t83 = "sqrt(x)"
+wgsl = "sqrt(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL fast sqrt is x * rsqrt(x) with special cases handled correctly (rsqrt at most 2 ulp). WGSL inherits from 1.0 / inverseSqrt(x), adding a 2.5 ULP division: looser."
+
+[[row]]
+id = "tan"
+msl = "tan"
+def = { src = "msl", ref = "6.6", quote = "T tan(T x) Compute tangent of x." }
+t81 = "tan"
+t82 = "tan(x)"
+t83 = "tan(x)"
+wgsl = "tan(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL fast tan is sin(x) * (1.0 / cos(x)); WGSL inherits from sin(x) / cos(x) with looser sin and cos."
+
+[[row]]
+id = "tanh"
+msl = "tanh"
+def = { src = "msl", ref = "6.6", quote = "T tanh(T x) Compute hyperbolic tangent of x." }
+t81 = "tanh"
+t82 = "tanh(x)"
+t83 = "tanh(x)"
+wgsl = "tanh(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL fast tanh is (t - 1)/(t + 1) with t = exp(2x). WGSL: the worse of an absolute error of 1e-5 and sinh(x)/cosh(x): looser."
+
+[[row]]
+id = "tanpi"
+msl = "tanpi"
+def = { src = "msl", ref = "6.6", quote = "T tanpi(T x) Compute tan(πx)." }
+t81 = "tanpi"
+t82 = "tanpi(x)"
+t83 = "tanpi(x)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL fast tanpi is tan(x * pi); WGSL has no tanpi. Evaluate with the tan polyfill."
+
+[[row]]
+id = "trunc"
+msl = "trunc"
+def = { src = "msl", ref = "6.6", quote = "T trunc(T x) Round x to integral value using the round toward zero rounding mode." }
+t81 = "trunc"
+t82 = "trunc"
+t83 = "trunc"
+wgsl = "trunc(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact in both (rule R2)."
+
+[[row]]
+id = "clamp"
+msl = "clamp"
+def = { src = "msl", ref = "6.3", quote = "T clamp(T x, T minval, T maxval) Returns fmin(fmax(x, minval), maxval). Results are undefined if minval > maxval." }
+wgsl = "clamp(x,low,high)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact selections; WGSL's two formulations differ only when low > high, where MSL is undefined."
+
+[[row]]
+id = "mix"
+msl = "mix"
+def = { src = "msl", ref = "6.3", quote = "T mix(T x, T y, T a) Returns the linear blend of x and y implemented as: x + (y – x) * a or: (1 -a) * x + a * y" }
+wgsl = "mix(x, y, z)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound and allows (1 - a) * x + a * y, which is WGSL's inherited formula; a outside [0, 1] is undefined in MSL."
+
+[[row]]
+id = "saturate"
+msl = "saturate"
+def = { src = "msl", ref = "6.3", quote = "T saturate(T x) Clamp the specified value within the range of 0.0 to 1.0." }
+wgsl = "saturate(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact selection in both."
+
+[[row]]
+id = "sign"
+msl = "sign"
+def = { src = "msl", ref = "6.3", quote = "T sign(T x) Returns 1.0 if x > 0, -0.0 if x = -0.0, +0.0 if x = +0.0, or -1.0 if x < 0. Returns 0.0 if x is a NaN." }
+wgsl = "sign(x)"
+fast_f32 = "native"
+fast_f32_analysis = "Equal for non-zero non-NaN inputs; under fast math MSL lets the sign of zero be ignored and NaN is undefined (1.6.3, 8.1)."
+
+[[row]]
+id = "smoothstep"
+msl = "smoothstep"
+def = { src = "msl", ref = "6.3", quote = "t = clamp((x – edge0)/(edge1 – edge0), 0, 1); return t * t * (3 – 2 * t);" }
+wgsl = "smoothstep(edge0, edge1, x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound and the same formula as WGSL; edge0 >= edge1 is undefined in MSL."
+
+[[row]]
+id = "step"
+msl = "step"
+def = { src = "msl", ref = "6.3", quote = "T step(T edge, T x) Returns 0.0 if x < edge; otherwise, it returns 1.0." }
+wgsl = "step(edge, x)"
+fast_f32 = "native"
+fast_f32_analysis = "Exact in both."
+
+[[row]]
+id = "dot"
+msl = "dot"
+def = { src = "msl", ref = "6.9", quote = "Ts dot(T x, T y) Return the dot product of x and y, which is x[0] * y[0] + x[1] * y[1] + …" }
+wgsl = "dot(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound for dot; WGSL's bound (the sum of products) is a stated bound, so it is at least as tight."
+
+[[row]]
+id = "cross"
+msl = "cross"
+def = { src = "msl", ref = "6.9", quote = "T cross(T x, T y) Return the cross product of x and y." }
+wgsl = "cross(x, x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound for cross."
+
+[[row]]
+id = "length"
+msl = "length"
+def = { src = "msl", ref = "6.9", quote = "Ts length(T x) Return the length of vector x, which is sqrt(x[0]2 + x[1]2 + …)" }
+wgsl = "length(x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound for the fast variant of length."
+
+[[row]]
+id = "length_squared"
+msl = "length_squared"
+def = { src = "msl", ref = "6.9", quote = "Ts length_squared(T x) Return the square of the length of vector x, which is (x[0]2 + x[1]2 + …)" }
+wgsl = "dot(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL defines it as the sum of squares and states no bound; WGSL dot(x, x) computes that sum."
+
+[[row]]
+id = "distance"
+msl = "distance"
+def = { src = "msl", ref = "6.9", quote = "Ts distance(T x, T y) Return the distance between x and y, which is length(x-y)" }
+wgsl = "distance(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound for the fast variant of distance."
+
+[[row]]
+id = "distance_squared"
+msl = "distance_squared"
+def = { src = "msl", ref = "6.9", quote = "Ts distance_squared(T x, T y) Return the square of the distance between x and y." }
+wgsl = "dot(x, y)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no bound; dot(x - y, x - y) computes the square of the distance."
+
+[[row]]
+id = "normalize"
+msl = "normalize"
+def = { src = "msl", ref = "6.9", quote = "T normalize(T x) Return a vector in the same direction as x but with a length of 1." }
+wgsl = "normalize(x)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states no accuracy bound for the fast variant of normalize."
+
+[[row]]
+id = "faceforward"
+msl = "faceforward"
+def = { src = "msl", ref = "6.9", quote = "T faceforward(T N, T I, T Nref) If dot(Nref, I) < 0.0 return N, otherwise return –N." }
+wgsl = "faceForward(x, y, z)"
+fast_f32 = "native"
+fast_f32_analysis = "WGSL faceForward(N, I, Nref) selects N when dot(Nref, I) < 0, as MSL does."
+
+[[row]]
+id = "reflect"
+msl = "reflect"
+def = { src = "msl", ref = "6.9", quote = "T reflect(T I, T N) For the incident vector I and surface orientation N, compute normalized N (NN), and return the reflection direction: I – 2 * dot(NN, I) * NN." }
+wgsl = "reflect(x, y)"
+fast_f32 = "polyfill"
+fast_f32_analysis = "MSL normalizes N before reflecting; WGSL reflect(I, N) uses N as given. The polyfill normalizes N first."
+
+[[row]]
+id = "refract"
+msl = "refract"
+def = { src = "msl", ref = "6.9", quote = "T refract(T I, T N, Ts eta) For the incident vector I and surface normal N, and the ratio of indices of refraction eta, return the refraction vector." }
+wgsl = "refract(x, y, z)"
+fast_f32 = "native"
+fast_f32_analysis = "MSL states neither a formula nor an accuracy bound; WGSL's refract computes the refraction vector."

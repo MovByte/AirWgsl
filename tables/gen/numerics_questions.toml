@@ -1,0 +1,96 @@
+# Questions of plan section 5.3 (floating point). Citations are verified by tables/check.py.
+
+[[question]]
+id = "5.3-msl-numerical-compliance"
+plan = "5.3"
+question = "Where does MSL state the accuracy of its builtins and operators?"
+status = "resolved"
+answer = "MSL 4.1 chapter 8, section 8.4: Table 8.1 (single precision), Table 8.2 (single precision with fast math, the default), Table 8.3 (half precision, Apple GPU family 4 and later), Tables 8.4 and 8.5 (bfloat). Apple publishes only the current specification; 4.1 marks language-version-specific rules inline, so it is cited in place of a 3.1-era PDF (plan change noted in the D2 report)."
+cite = [
+  { src = "msl", ref = "8.4", quote = "Table 8.1. Accuracy of single-precision floating-point operations and functions" },
+  { src = "msl", ref = "8.4", quote = "Table 8.2. Accuracy of single-precision operations and functions with fast math enabled" },
+  { src = "msl", ref = "8.4", quote = "Table 8.3. Accuracy of half-precision floating-point operations and functions" },
+]
+
+[[question]]
+id = "5.3-wgsl-accuracy"
+plan = "5.3"
+question = "Where does WGSL state the accuracy of its operations?"
+status = "resolved"
+answer = "WGSL section 15.7.4.1, two tables (expressions and built-in functions) with f32 and f16 columns; general rules in 15.7.2 (finite math assumption, flush to zero), 15.7.3 (overflow), 15.7.5 (reassociation and fusion) and 15.7.6 (conversions). The [[row]] entries of this file quote the cells."
+cite = [
+  { src = "wgsl", ref = "#concrete-float-accuracy", quote = "15.7.4.1. Accuracy of Concrete Floating Point Expressions" },
+]
+
+[[question]]
+id = "5.3-rounding-direction"
+plan = "5.3"
+question = "Is WGSL's native single-precision arithmetic at least as tight as MSL's fast-math arithmetic?"
+status = "resolved"
+answer = "Not for + - * (or fma, fdim, fract): MSL requires round-to-nearest-even or round-toward-zero results, WGSL allows either neighbour (rule R1). Under the plan's rule these rows are therefore polyfill even in fast math, which in practice means integer soft-float for ordinary arithmetic. Division, rsqrt, log, atanh and the exact operations (R2) are native. This makes the plan's assumption in 5.3 (native fast-math arithmetic) inconsistent with its own rule; the owner must choose between soft-float everywhere, a per-host conformance proof of round-to-nearest (a test cannot be exhaustive for binary32), or accepting WGSL's rounding as a stated deviation (plan change reported)."
+cite = [
+  { src = "msl", ref = "8.2", quote = "Either round ties to even or round toward zero rounding mode may be supported" },
+  { src = "msl", ref = "8.4", quote = "x + y Correctly rounded" },
+  { src = "wgsl", ref = "#differences-from-ieee754", quote = "No rounding mode is specified. An implementation may round an intermediate result up or down." },
+]
+
+[[question]]
+id = "5.3-half-target-family"
+plan = "5.3"
+question = "Which MSL half-precision accuracy applies to the A10X?"
+status = "resolved"
+answer = "None: Table 8.3 applies from Apple GPU family 4, and Apple's family tables place the A10 series in Apple3. MSL therefore states no half accuracy for the target (generic half decision). The family is D1's to confirm; a different D1 answer reopens every half row. Related: section 1.6.3 says math functions honor INF and NaN only from Apple GPU family 4, which the soft-float precise path satisfies either way."
+cite = [
+  { src = "msl", ref = "8.4", quote = "Table 8.3 applies to iOS and macOS, starting with Apple GPU Family 4 hardware." },
+  { src = "mfst", quote = "A10-series Metal Apple3" },
+  { src = "msl", ref = "1.6.3", quote = "For Apple silicon, starting with Apple GPU Family 4, the math functions honor INF and NaN." },
+]
+
+[[question]]
+id = "5.3-quantize-to-f16"
+plan = "5.3"
+question = "Can WGSL quantizeToF16 implement MSL's float-to-half rounding?"
+status = "resolved"
+answer = "No. MSL rounds float to half with round-to-nearest-even and must not flush the resulting half denormals; WGSL quantizeToF16 may flush a subnormal binary16 intermediate to zero, gives an indeterminate value outside the binary16 finite range, and its conversion may choose either neighbouring value. The rounding is done with integer bit operations."
+cite = [
+  { src = "msl", ref = "8.6", quote = "Conversions from float to half or to bfloat round the mantissa using the round ties to even rounding mode. When converting a float to a half, denormalized numbers generated for the half data type may not be flushed to zero." },
+  { src = "wgsl", ref = "#quantizeToF16-builtin", quote = "The intermediate binary16 value may be flushed to zero, i.e. the final result may be zero if the intermediate binary16 value is subnormal." },
+  { src = "wgsl", ref = "#floating-point-conversion", quote = "WGSL does not specify whether the higher or lower representable value is chosen, and different instances of such a conversion may choose differently." },
+]
+
+[[question]]
+id = "5.3-denormals"
+plan = "5.3"
+question = "What does Metal promise for denormals, with or without air.compile.denorms_disable?"
+status = "resolved"
+answer = "MSL allows denormal inputs and outputs of single, half and bfloat arithmetic to be flushed to zero, without condition, and documents no compile option that changes this; preserving and flushing both conform. WGSL allows the same for the operations of its accuracy tables. No explicit flush is emitted for arithmetic. The exceptions are conversions: float-to-half must not flush (question 5.3-quantize-to-f16), and texture conversions follow MSL 8.7. Apple's tables list FP32 denormal support only from Apple11, consistent with flushing on the target (D1 confirms the device)."
+cite = [
+  { src = "msl", ref = "8.1", quote = "Denormalized single-precision, half-precision, or brain floating-point numbers passed as input to or produced as the output of single-precision, half-precision, or brain floating-point arithmetic operations may be flushed to zero." },
+  { src = "msl", ref = "8.5", quote = "In each of the above cases, if an operand or result is flushed to zero, the sign of the zero is undefined." },
+  { src = "mfst", quote = "FP32 denormalized numbers Metal 3 & 4 Apple11" },
+]
+
+[[question]]
+id = "5.3-conversions"
+plan = "5.3"
+question = "MSL's rules for numeric conversions, and where WGSL's casts differ."
+status = "resolved"
+answer = "MSL static_cast: to floating point rounds to nearest even, to integer rounds toward zero, no saturation; float NaN converts to integer 0; float-to-half rounds to nearest even without flushing denormals; half and bfloat to float are exact. MSL gives no result for out-of-range float-to-integer conversions. WGSL: float-to-integer clamps then truncates and makes NaN indeterminate; integer or float to float may round either way. Lowering: float-to-integer may use WGSL's clamp-and-truncate (one admissible value for MSL's unspecified out-of-range result) but must map NaN to 0 by testing the bit pattern, because a WGSL comparison may assume NaN absent; integer-to-float and float-to-narrower-float need integer round-to-nearest-even. The .sat and rounding-mode suffixed air.convert forms are covered in intrinsics.toml."
+cite = [
+  { src = "msl", ref = "2.23", quote = "The static_cast operator converts from a scalar or vector type to another scalar or vector type using the default rounding mode with no saturation (when converting to floating-point, round ties to even; when converting to an integer, round toward zero)." },
+  { src = "msl", ref = "8.6", quote = "When converting a floating-point type to an integer type, if the floating-point value is NaN, the resulting integer is 0." },
+  { src = "msl", ref = "8.6", quote = "Note that fast math does not change the accuracy of conversion operations." },
+  { src = "wgsl", ref = "#floating-point-conversion", quote = "If X is a NaN, the result is an indeterminate value in T." },
+  { src = "wgsl", ref = "#floating-point-conversion", quote = "Note: In other words, for non-NaN cases, floating point to integer conversion clamps the value to be within the range of the target type, then rounds toward zero." },
+]
+
+[[question]]
+id = "5.3-derivative-uniformity"
+plan = "5.3"
+question = "May the compiler turn off WGSL's derivative_uniformity diagnostic, given MSL's rule for derivatives in non-uniform control flow?"
+status = "resolved"
+answer = "Yes. MSL leaves derivatives undefined in non-uniform control flow, and WGSL defines a derivative computed in non-uniform control flow as an indeterminate value, so emitting diagnostic(off, derivative_uniformity) changes no defined result. In MSL 2.2 and earlier, discard_fragment can make control flow non-uniform; from 2.3 it does not (see question 5.6-discard)."
+cite = [
+  { src = "msl", ref = "6.11.1.1", quote = "Derivatives are undefined within nonuniform control flow." },
+  { src = "wgsl", ref = "#derivatives", quote = "If one of these functions is called in non-uniform control flow, then the result is an indeterminate value." },
+]

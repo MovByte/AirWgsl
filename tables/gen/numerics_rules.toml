@@ -1,0 +1,62 @@
+# Comparison rules for the numerics table and the decisions that apply to every row.
+
+[[rule]]
+id = "R1"
+statement = "Rounding direction. MSL lets an implementation use round-to-nearest-even or round-toward-zero; its 'correctly rounded' therefore admits only those results. WGSL specifies no rounding mode and its 'correctly rounded' admits either neighbouring value. A WGSL operation that is only correctly rounded in WGSL's sense does not meet an MSL 'correctly rounded' requirement, except under R2."
+cite = [
+  { src = "msl", ref = "8.2", quote = "Either round ties to even or round toward zero rounding mode may be supported for single- precision, half-precision, and brain floating-point operations." },
+  { src = "wgsl", ref = "#floating-point-accuracy", quote = "the smallest value in T greater than x, or the largest value in T less than x. That is, the result may be rounded up or down: WGSL does not specify a rounding mode." },
+  { src = "wgsl", ref = "#differences-from-ieee754", quote = "No rounding mode is specified. An implementation may round an intermediate result up or down." },
+]
+
+[[rule]]
+id = "R2"
+statement = "Exact results. When the infinitely precise result is always representable (ceil, floor, trunc, rint, fabs, modf, frexp, and ldexp or selections such as fmax away from subnormals), a correctly rounded result in either text is the exact value, so the native WGSL operation conforms."
+cite = [
+  { src = "wgsl", ref = "#floating-point-accuracy", quote = "The correctly rounded result of the operation for floating point type T is: x, when x is in T," },
+]
+
+[[rule]]
+id = "R3"
+statement = "Error bounds. For ulp and absolute-error bounds the comparison is between the largest errors each text allows over the domain where MSL states a bound. For rows MSL states as 'Implemented as' a formula, the MSL bound is that of the formula with MSL's own operations; the error of each basic operation is below 1 ulp in both texts (round-toward-zero in MSL, either direction in WGSL), so a WGSL evaluation of the same formula with component operations whose bounds are at least as tight meets it. WGSL 'Inherited from' rows are compared the same way."
+cite = [
+  { src = "msl", ref = "8.4", quote = "The ULP is defined as follows:" },
+  { src = "wgsl", ref = "#floating-point-accuracy", quote = "That is, the accuracy of the operation is defined as the accuracy of evaluating the given WGSL expression." },
+  { src = "wgsl", ref = "#floating-point-accuracy", quote = "When the accuracy for an operation is specified over an input range, the accuracy is undefined for input values outside that range." },
+]
+
+[[rule]]
+id = "R4"
+statement = "No stated bound. Where MSL states no accuracy for a function (it is not in Tables 8.1-8.3, or the cell says Undefined), any result conforms, so a WGSL function with the same definition is native. Definitions themselves (formulas, rounding of halfway cases, normalization of an argument) must still agree."
+cite = [
+  { src = "msl", ref = "8.4", quote = "fmod Undefined" },
+]
+
+[[rule]]
+id = "R5"
+statement = "Fast-math latitude. Under fast math MSL leaves NaN and infinity inputs and outputs undefined and lets the compiler reassociate and contract; WGSL lets an implementation assume NaN and infinity do not occur at run time and also reassociates and fuses. Differences confined to NaN, infinity and signed zero therefore do not affect fast-math decisions."
+cite = [
+  { src = "msl", ref = "8.1", quote = "If fast math is enabled the behavior of handling NaN or INF (as inputs or outputs) is undefined." },
+  { src = "wgsl", ref = "#differences-from-ieee754", quote = "Implementations may assume that overflow, infinities, and NaNs are not present during shader execution." },
+  { src = "wgsl", ref = "#reassociation-and-fusion", quote = "An implementation may reassociate operations." },
+]
+
+[[rule]]
+id = "R6"
+statement = "Subnormals. MSL allows denormalized single, half and bfloat inputs and outputs of arithmetic to be flushed to zero; WGSL allows the inputs and outputs of the operations in its accuracy tables to be flushed. Flushing is therefore not a difference for arithmetic; conversions are covered by question 5.3-conversions."
+cite = [
+  { src = "msl", ref = "8.1", quote = "Denormalized single-precision, half-precision, or brain floating-point numbers passed as input to or produced as the output of single-precision, half-precision, or brain floating-point arithmetic operations may be flushed to zero." },
+  { src = "wgsl", ref = "#differences-from-ieee754", quote = "Any inputs or outputs of operations listed in § 15.7.4 Floating Point Accuracy may be flushed to zero." },
+]
+
+[generic]
+precise_f32 = "soft-float"
+precise_f32_analysis = "With fast math disabled MSL requires INF and NaN support, while WGSL lets an implementation assume they never occur at run time and make such results indeterminate. No native WGSL floating-point operation meets that, so precise operations go through the integer soft-float library, which must also meet the Table 8.1 bound of the row."
+half = "native"
+half_analysis = "Table 8.3 applies from Apple GPU family 4; the target A10X is Apple3 (Apple's family tables; the D1 profile is authoritative), so MSL states no half-precision accuracy for the target and any WGSL result conforms (R4). Lowering: f16 with shader-f16, otherwise f32 evaluation rounded to binary16 with integer operations (question 5.3-quantize-to-f16). If D1 reports a family of 4 or later, every half row must be re-decided against Table 8.3."
+cite = [
+  { src = "msl", ref = "8.1", quote = "NaNs must be supported for single-precision, half-precision, and brain floating-point numbers (with fast math disabled)." },
+  { src = "wgsl", ref = "#differences-from-ieee754", quote = "In such an implementation, if the intermediate result of evaluating a runtime expression overflows, or yields an infinity or a NaN, the final result will be an indeterminate value of the target type." },
+  { src = "msl", ref = "8.4", quote = "Table 8.3 applies to iOS and macOS, starting with Apple GPU Family 4 hardware." },
+  { src = "mfst", quote = "A10-series Metal Apple3" },
+]
