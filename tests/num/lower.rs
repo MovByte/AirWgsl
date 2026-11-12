@@ -233,6 +233,14 @@ fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
     naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
         .validate(&m)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&module)));
+    // A second WGSL front end: Dawn's tint, when NM_TINT names its executable.
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("numerics-all-names.wgsl");
+    std::fs::write(&path, &module).unwrap();
+    if let Ok(tint) = std::env::var("NM_TINT") {
+        let out = std::process::Command::new(&tint).arg("--format").arg("wgsl").arg(&path).output().unwrap();
+        assert!(out.status.success(), "tint rejects the module: {}", String::from_utf8_lossy(&out.stderr));
+        eprintln!("tint accepts {} ({} bytes)", path.display(), module.len());
+    }
     for (k, v) in &tally {
         eprintln!("{:5} {}", v, k);
     }
