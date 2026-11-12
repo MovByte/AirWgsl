@@ -1,6 +1,6 @@
 //! The WGSL library the numerics lowering calls into, and the prelude generator.
 //!
-//! The library is a set of WGSL source files under `wgsl/`. Each top-level item (a `fn`, `const` or `struct` starting
+//! The library is a set of WGSL source files under `wgsl/`. Each top-level item (a `fn`, `const`, `struct` or `alias` starting
 //! in column 0, with the comment lines directly above it) is one unit; an item's dependencies are the other items it
 //! names. Every identifier the library defines starts with `nm_`, a prefix the rest of the generated module must not
 //! use. A [`Prelude`] collects the items a shader's lowered operations need and emits their transitive closure in
@@ -20,6 +20,8 @@ const SOURCES: &[(&str, &str)] = &[
     ("xfconst.wgsl", include_str!("wgsl/xfconst.wgsl")),
     ("math.wgsl", include_str!("wgsl/math.wgsl")),
     ("common.wgsl", include_str!("wgsl/common.wgsl")),
+    ("int.wgsl", include_str!("wgsl/int.wgsl")),
+    ("half.wgsl", include_str!("wgsl/half.wgsl")),
 ];
 
 /// One top-level library item.
@@ -47,7 +49,11 @@ pub struct Library {
 pub struct LibraryError(pub String);
 
 fn item_name(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("fn ").or_else(|| line.strip_prefix("const ")).or_else(|| line.strip_prefix("struct "))?;
+    let rest = line
+        .strip_prefix("fn ")
+        .or_else(|| line.strip_prefix("const "))
+        .or_else(|| line.strip_prefix("struct "))
+        .or_else(|| line.strip_prefix("alias "))?;
     let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
     Some(&rest[..end])
 }

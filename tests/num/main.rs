@@ -8,6 +8,7 @@
 mod common;
 mod gpu;
 mod inputs;
+mod lower;
 mod math;
 mod metal_special;
 mod reference;

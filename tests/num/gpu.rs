@@ -14,8 +14,10 @@ pub struct Gpu {
     pub has_f16: bool,
 }
 
-/// The largest number of invocations, and output words, one run handles.
+/// The largest number of invocations one run handles.
 pub const MAX_ITEMS: u32 = 1 << 24;
+/// The largest number of output words one run handles (128 MiB).
+pub const MAX_WORDS: u64 = 1 << 25;
 
 impl Gpu {
     /// The shared device. A test that needs the GPU fails when no adapter exists: the numerics proofs are not skipped.
@@ -142,7 +144,7 @@ impl Kernel {
         if let Some(e) = pollster::block_on(scope.pop()) {
             panic!("kernel rejected: {}", e);
         }
-        let bytes = MAX_ITEMS as u64 * stride as u64 * 4;
+        let bytes = (MAX_ITEMS as u64 * stride as u64).min(MAX_WORDS) * 4;
         let out = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: bytes,
@@ -173,7 +175,7 @@ impl Kernel {
     /// Run `n` items (at most [`MAX_ITEMS`]) with up to three input arrays and parameters y, z, w; return
     /// `n * stride` output words.
     pub fn run(&self, inputs: &[&[u32]], params: [u32; 3], n: u32) -> Vec<u32> {
-        assert!(n <= MAX_ITEMS && inputs.len() <= 3);
+        assert!(n <= MAX_ITEMS && n as u64 * self.stride as u64 <= MAX_WORDS && inputs.len() <= 3);
         let gpu = Gpu::get();
         let device = &gpu.device;
         let ins: Vec<wgpu::Buffer> = inputs
