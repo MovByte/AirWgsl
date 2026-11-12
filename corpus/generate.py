@@ -253,16 +253,33 @@ PIXEL_FORMATS = ["r8unorm", "r8snorm", "r16unorm", "r16snorm", "rg8unorm", "rg8s
                  "rgba16unorm", "rgba16snorm", "rgb10a2", "rg11b10f", "rgb9e5"]
 
 
+def pack_reach(fn):
+    """The __metal_pack/unpack entry of a pack_* or unpack_* function."""
+    kind = "pack" if fn.startswith("pack") else "unpack"
+    fmt = fn.split("_to_")[1] if kind == "pack" else fn.split("_to_")[0][len("unpack_"):]
+    fmt = fmt.replace("srgb_unorm4x8", "unorm4x8_srgb").replace("unorm10a2", "unorm_rgb10a2")
+    fmt = fmt.replace("unorm565", "unorm_rgb565")
+    return f"{kind}_{fmt}"
+
+
+PIXEL_REACH = {"r8unorm": "unorm1x8", "r8snorm": "snorm1x8", "r16unorm": "unorm1x16", "r16snorm": "snorm1x16",
+               "rg8unorm": "unorm2x8", "rg8snorm": "snorm2x8", "rg16unorm": "unorm2x16", "rg16snorm": "snorm2x16",
+               "rgba8unorm": "unorm4x8", "srgba8unorm": "unorm4x8_srgb", "rgba8snorm": "snorm4x8",
+               "rgba16unorm": "unorm4x16", "rgba16snorm": "snorm4x16", "rgb10a2": "unorm_rgb10a2",
+               "rg11b10f": "unorm_rg11b10f", "rgb9e5": "unorm_rgb9e5"}
+
+
 def pack_groups():
     g = Group("pack", "pack")
     g.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
     for fn in PACK:
         for s, w in all_types():
             g.add({"fn": fn, "type": vt(s, w)},
-                  kernel_fn(f"v{len(g.variants)}", k_sink(f"{fn}(a0[i])"), [vt(s, w)]))
+                  kernel_fn(f"v{len(g.variants)}", k_sink(f"{fn}(a0[i])"), [vt(s, w)]), [pack_reach(fn)])
     for fn in UNPACK:
         for s in ("ushort", "uint", "int", "ulong"):
-            g.add({"fn": fn, "type": s}, kernel_fn(f"v{len(g.variants)}", k_sink(f"{fn}(a0[i])"), [s]))
+            g.add({"fn": fn, "type": s}, kernel_fn(f"v{len(g.variants)}", k_sink(f"{fn}(a0[i])"), [s]),
+                  [pack_reach(fn)])
     gp = Group("pixel_formats", "pixel")
     gp.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
     for fmt in PIXEL_FORMATS:
@@ -270,7 +287,8 @@ def pack_groups():
             t = vt(s, w)
             body = (f"    device {fmt}<{t}> *p = (device {fmt}<{t}> *)(r + 1024);\n"
                     f"    {t} v = p[i];\n    p[i + 1] = a0[i];\n    sink(r + i * 64, v);")
-            gp.add({"format": fmt, "type": t}, kernel_fn(f"v{len(gp.variants)}", body, [t]))
+            gp.add({"format": fmt, "type": t}, kernel_fn(f"v{len(gp.variants)}", body, [t]),
+                   [f"pack_{PIXEL_REACH[fmt]}", f"unpack_{PIXEL_REACH[fmt]}"])
     return [g, gp]
 
 
@@ -376,7 +394,7 @@ def sync_groups():
                 for op in SIMD_FILL:
                     g.add({"fn": f"{prefix}_{op}", "type": t, "modulo": False},
                           build(f"v{len(g.variants)}", put(f"{prefix}_{op}(a0[i], a1[i], ushort(a2[i]))"), [t, t, "ushort"]),
-                          [f"{prefix}_{op}"])
+                          [f"{prefix}_{op}"] + (["get_simdgroup_size"] if prefix == "simd" else []))
                     g.add({"fn": f"{prefix}_{op}", "type": t, "modulo": True},
                           build(f"v{len(g.variants)}", put(f"{prefix}_{op}(a0[i], a1[i], ushort(a2[i]), ushort(a2[i + 1]))"), [t, t, "ushort"]),
                           [f"{prefix}_{op}"])
@@ -409,6 +427,22 @@ def sync_groups():
                   ["simdgroup_matrix_8x8_load", "simdgroup_matrix_8x8_store", "simdgroup_matrix_8x8_init_filled",
                    "simdgroup_matrix_8x8_init_diag", "simdgroup_matrix_8x8_multiply_accumulate"])
     groups.append(g)
+    gm = Group("simdgroup_matrix_mixed", "simdgroup_matrix", min_version="2.3")
+    gm.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
+    mtypes = ("half", "float", "bfloat")
+    for d in mtypes:
+        for a in mtypes:
+            for b in mtypes:
+                for c in mtypes:
+                    body = (f"    simdgroup_matrix<{a}, 8, 8> ma = make_filled_simdgroup_matrix<{a}, 8, 8>({a}(a0[i]));\n"
+                            f"    simdgroup_matrix<{b}, 8, 8> mb = make_filled_simdgroup_matrix<{b}, 8, 8>({b}(a0[i]));\n"
+                            f"    simdgroup_matrix<{c}, 8, 8> mc = make_filled_simdgroup_matrix<{c}, 8, 8>({c}(a0[i]));\n"
+                            f"    simdgroup_matrix<{d}, 8, 8> md;\n"
+                            f"    simdgroup_multiply_accumulate(md, ma, mb, mc);\n"
+                            f"    simdgroup_store(md, (device {d} *)(r + 4096), 8);")
+                    gm.add({"d": d, "a": a, "b": b, "c": c}, kernel_fn(f"v{len(gm.variants)}", body, ["float"]),
+                           ["simdgroup_matrix_8x8_multiply_accumulate"])
+    groups.append(gm)
     return groups
 
 
@@ -732,6 +766,83 @@ def imageblock_groups():
     return [g]
 
 
+IMAGEBLOCK_MEMBERS = ["half", "half2", "half4", "float", "float2", "float4", "int", "int2", "int4",
+                     "uint", "uint2", "uint4", "short", "short2", "short4", "ushort", "ushort2", "ushort4",
+                     "char4", "uchar4", "r8unorm<half>", "rg8unorm<half2>", "rgba8unorm<half4>",
+                     "srgba8unorm<half4>", "rgba8snorm<half4>", "rgba8unorm<float4>", "r16unorm<float>",
+                     "rg16snorm<float2>", "rgba16unorm<half4>", "rgb10a2<half4>", "rg11b10f<half3>",
+                     "rgb9e5<half3>"]
+SLICE_TEXTURES = {  # texture -> write arguments after the slice, by coordinate type
+    "texture1d": lambda c: f"{c}(lid.x)", "texture1d_array": lambda c: f"{c}(lid.x), {c}(0)",
+    "texture2d": lambda c: f"{c}2(lid)", "texture2d_array": lambda c: f"{c}2(lid), {c}(0)",
+    "texture3d": lambda c: f"{c}3(lid.x, lid.y, 0)", "texturecube": lambda c: f"{c}2(lid), {c}(0)",
+    "texturecube_array": lambda c: f"{c}2(lid), {c}(0), {c}(0)",
+}
+
+
+def imageblock_sweep_groups():
+    """Implicit and explicit imageblocks over every member type: reads, writes, data-rate and
+    coverage-mask forms, coverage queries, and slice writes to every texture type."""
+    groups = []
+    g = Group("imageblock_access", "imageblock", min_version="2.0")
+    g.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
+    tile = ("kernel void {n}(imageblock<{ib}{layout}> ib, ushort2 lid [[thread_position_in_threadgroup]],"
+            " device uchar *r [[buffer(30)]])\n{{\n{body}\n}}\n")
+    for m in IMAGEBLOCK_MEMBERS:
+        forms = [
+            ("implicit_read_write", "imageblock_layout_implicit",
+             "    I v = ib.read(lid);\n    ib.write(v, lid);", ["imageblock_implicit_read", "imageblock_implicit_write"]),
+            ("implicit_rate", "imageblock_layout_implicit",
+             "    I v = ib.read(lid, 0, imageblock_data_rate::color);\n    ib.write(v, lid, 1, imageblock_data_rate::sample);",
+             ["imageblock_implicit_read", "imageblock_implicit_write"]),
+            ("implicit_mask_write", "imageblock_layout_implicit",
+             "    I v = ib.read(lid);\n    ib.write(v, lid, ushort(3));", ["imageblock_implicit_mask_write"]),
+            ("coverage_queries", "imageblock_layout_implicit",
+             "    sink(r, ushort(ib.get_num_colors(lid) + ib.get_color_coverage_mask(lid, 0)));\n"
+             "    sink(r + 8, ushort(ib.get_width() + ib.get_height() + ib.get_num_samples()));",
+             ["get_imageblock_num_colors", "get_imageblock_color_coverage_mask", "get_imageblock_width",
+              "get_imageblock_height", "get_imageblock_samples"]),
+            ("explicit_data", "imageblock_layout_explicit",
+             "    threadgroup_imageblock E *p = ib.data(lid);\n    threadgroup_imageblock E *q = ib.data(lid, 0, imageblock_data_rate::sample);\n"
+             "    q->a = p->a;", ["imageblock_explicit_data"]),
+            ("explicit_mask_write", "imageblock_layout_explicit",
+             "    E v = *ib.data(lid);\n    ib.write(v, lid, ushort(3));", ["imageblock_explicit_mask_write"]),
+        ]
+        for label, layout, body, reach in forms:
+            name = f"v{len(g.variants)}"
+            struct = (f"struct I_{name} {{ {m} a [[color(0)]]; }};\n" if "implicit" in layout
+                      else f"struct E_{name} {{ {m} a; }};\n")
+            ib = f"I_{name}" if "implicit" in layout else f"E_{name}"
+            text = struct + tile.format(n=name, ib=ib, layout=", " + layout if "implicit" in layout else "",
+                                        body=body.replace("I v", f"I_{name} v").replace("E v", f"E_{name} v")
+                                        .replace("E *", f"E_{name} *"))
+            g.add({"member": m, "form": label}, text, reach)
+    groups.append(g)
+    for tex, coord in SLICE_TEXTURES.items():
+        gs = Group(f"imageblock_slice_{tex}", "imageblock", min_version="2.0")
+        gs.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
+        for m in IMAGEBLOCK_MEMBERS:
+            for comp in ("half", "float", "short", "ushort", "int", "uint"):
+                for ct in ("uint", "ushort"):
+                    for layout in ("implicit", "explicit"):
+                        name = f"v{len(gs.variants)}"
+                        if layout == "implicit":
+                            struct = f"struct I_{name} {{ {m} a [[color(0)]]; }};\n"
+                            param = f"imageblock<I_{name}, imageblock_layout_implicit> ib"
+                            slice_expr = f"ib.slice<{m}>(0)"
+                        else:
+                            struct = f"struct E_{name} {{ {m} a; }};\n"
+                            param = f"imageblock<E_{name}> ib"
+                            slice_expr = "ib.slice(ib.data(lid)->a)"
+                        text = (struct + f"kernel void {name}({param}, {tex}<{comp}, access::write> t [[texture(0)]],"
+                                f" ushort2 lid [[thread_position_in_threadgroup]])\n{{\n"
+                                f"    t.write({slice_expr}, {coord(ct)});\n}}\n")
+                        gs.add({"member": m, "texture": tex, "component": comp, "coord": ct, "layout": layout},
+                               text, ["imageblock_implicit_data"] if layout == "implicit" else [])
+        groups.append(gs)
+    return groups
+
+
 # ---------------------------------------------------------------------------------------------
 # Command buffers, function tables, ray tracing, mesh, tessellation, function constants
 # ---------------------------------------------------------------------------------------------
@@ -764,9 +875,33 @@ def indirect_groups():
                       f"compute_pipeline_state cs [[id(1)]]; }};\n")
             extra.append((f"device ICBState_{name}", "*st", "[[buffer(11)]]"))
         body = f"    {kind}_command cmd(args->cmds, i);\n    {stmt}"
+        extra.append(("constant uchar", "*c", "[[buffer(12)]]"))
+        reach = label.replace("set_render_pipeline_state", "set_pipeline_state").replace(
+            "set_compute_pipeline_state", "set_pipeline_state")
         g.add({"command": kind, "fn": label}, prefix + kernel_fn(name, body, ["float"], extra),
-              [f"{label}_{kind}_command"])
+              [f"{reach.split(':')[0]}_{kind}_command"])
 
+    # Every pointer argument in each address space and element type the encoder accepts.
+    compute_pointers = []
+    for space, ptr in (("device", "r"), ("constant", "c")):
+        for t in ("ushort", "uint"):
+            render.append((f"draw_indexed_primitives:{space}:{t}",
+                           f"cmd.draw_indexed_primitives(primitive_type::triangle, 3, ({space} {t} *){ptr}, 1, 0, 0);"))
+        for factors in ("MTLTriangleTessellationFactorsHalf", "MTLQuadTessellationFactorsHalf"):
+            for space2, ptr2 in (("device", "r"), ("constant", "c")):
+                render.append((f"draw_patches:{space}:{space2}:{factors}",
+                               f"cmd.draw_patches(3, 0, 1, (const {space} uint *){ptr}, 1, 0, (const {space2} {factors} *){ptr2});"))
+                render.append((f"draw_indexed_patches:{space}:{space2}:{factors}",
+                               f"cmd.draw_indexed_patches(3, 0, 1, (const {space} uint *){ptr}, (const {space} void *){ptr}, 1, 0,"
+                               f" (const {space2} {factors} *){ptr2});"))
+        for fn in ("set_vertex_buffer", "set_fragment_buffer", "set_object_buffer", "set_mesh_buffer"):
+            for t in ("uchar", "float", "float4"):
+                render.append((f"{fn}:{space}:{t}", f"cmd.{fn}(({space} {t} *){ptr}, 0);"))
+                render.append((f"{fn}:{space}:{t}:stride", f"cmd.{fn}(({space} {t} *){ptr}, 16, 0);"))
+        for t in ("uchar", "float", "float4"):
+            compute_pointers.append((f"set_kernel_buffer:{space}:{t}", f"cmd.set_kernel_buffer(({space} {t} *){ptr}, 0);"))
+            compute_pointers.append((f"set_kernel_buffer:{space}:{t}:stride",
+                                     f"cmd.set_kernel_buffer(({space} {t} *){ptr}, 16, 0);"))
     for label, stmt in render:
         icb_variant("render", label, stmt)
     compute = [
@@ -779,7 +914,7 @@ def indirect_groups():
         ("set_compute_pipeline_state", "cmd.set_compute_pipeline_state(st->cs);"),
         ("reset", "cmd.reset();"), ("set_barrier", "cmd.set_barrier();"), ("clear_barrier", "cmd.clear_barrier();"),
     ]
-    for label, stmt in compute:
+    for label, stmt in compute + compute_pointers:
         icb_variant("compute", label, stmt)
     g.add({"fn": "copy_command"},
           kernel_fn(f"v{len(g.variants)}", "    render_command a(args->cmds, i), b(args->cmds, i + 1);\n    b.copy_command(a);\n"
@@ -838,7 +973,7 @@ RT_QUERIES = [
     "commit_curve_intersection()", "get_intersection_params()",
 ]
 RT_STATEMENTS = ("next", "abort", "reset", "commit_triangle_intersection", "commit_bounding_box_intersection",
-                 "commit_curve_intersection")
+                 "commit_curve_intersection", "get_intersection_params")
 
 
 def powerset(items):
@@ -891,6 +1026,8 @@ def raytracing_groups():
                     call = f"q.{qexpr}"
                     if method == "reset":
                         call = f"q.reset({ctor})"
+                    if method == "get_intersection_params":
+                        call = f"q.reset({ctor.replace('params', 'q.get_intersection_params()')})"
                     body = (f"    ray rr(float3(a0[i]), float3(0, 0, 1), 0.0f, 100.0f);\n    intersection_params params;\n"
                             f"    intersection_query<{tl}> q({ctor});\n"
                             + (f"    {call};" if method in RT_STATEMENTS else k_sink(call)))
@@ -911,14 +1048,37 @@ def raytracing_groups():
         ("ias_get_instance_count", k_sink("ias.get_instance_count()")),
         ("ias_get_primitive_acceleration_structure", k_sink("is_null_primitive_acceleration_structure(ias.get_primitive_acceleration_structure(0))")),
         ("resource_id", k_sink("pas.get_resource_id()")),
+        ("get_acceleration_structure", k_sink("is_null_acceleration_structure(gas.get_acceleration_structure<>(0))")),
+        ("get_acceleration_structure_instancing",
+         k_sink("is_null_acceleration_structure(gas.get_acceleration_structure<instancing>(0))")),
+        ("generic_get_instance_count", k_sink("gas.get_instance_count()")),
+        ("is_null_acceleration_structure", k_sink("is_null_acceleration_structure(gas)")),
+        ("ift_get_buffer", k_sink("ft.get_buffer<device float *>(0)[0]")),
+        ("ift_get_visible_function_table", k_sink("is_null_visible_function_table(ft.get_visible_function_table<void(int)>(0))")),
+        ("resource_id_instance", "    MTLResourceID rid = gas;\n" + k_sink("rid")),
+        ("resource_id_primitive", "    MTLResourceID rid = pgas;\n" + k_sink("rid")),
     ]
     for label, body in objs:
         ga.add({"fn": label}, kernel_fn(f"v{len(ga.variants)}", body, ["float"],
-                                        [("instance_acceleration_structure", "ias", "[[buffer(10)]]"),
+                                        [("acceleration_structure<instancing>", "gas", "[[buffer(14)]]"),
+                                         ("acceleration_structure<>", "pgas", "[[buffer(15)]]"),
+                                         ("instance_acceleration_structure", "ias", "[[buffer(10)]]"),
                                          ("primitive_acceleration_structure", "pas", "[[buffer(11)]]"),
                                          ("intersection_function_table<triangle_data>", "ft", "[[buffer(12)]]"),
                                          ("visible_function_table<void(int)>", "vt", "[[buffer(13)]]")]),
-               [label])
+               {"ift_set_buffer": ["set_buffer_intersection_function_table"],
+                "ift_set_visible_function_table": ["set_visible_function_table_intersection_function_table"],
+                "ift_size": ["get_size_intersection_function_table"],
+                "ias_get_instance_count": ["get_instance_count_instance_acceleration_structure"],
+                "generic_get_instance_count": ["get_instance_count_instance_acceleration_structure"],
+                "ias_get_primitive_acceleration_structure": ["get_primitive_acceleration_structure_instance_acceleration_structure"],
+                "get_acceleration_structure": ["get_primitive_acceleration_structure_instance_acceleration_structure"],
+                "get_acceleration_structure_instancing": ["get_instance_acceleration_structure_instance_acceleration_structure"],
+                "ift_get_buffer": ["get_buffer_intersection_function_table"],
+                "ift_get_visible_function_table": ["get_visible_function_table_intersection_function_table"],
+                "resource_id_instance": ["get_resource_id_instance_acceleration_structure"],
+                "resource_id_primitive": ["get_resource_id_primitive_acceleration_structure"],
+                }.get(label, [label]))
     groups.append(ga)
     gf = Group("intersection_functions", "raytracing", min_version="2.3", preamble=RT_PREAMBLE)
     gf.add({"harness": True}, kernel_fn("v0", "    sink(r + i * 64, a0[i]);", ["float"]))
@@ -985,6 +1145,21 @@ def function_constant_groups():
                                       "    if (fc_derived) sink(r + i * 64, a0[i]);", ["float"]), [])
     g.add({"fn": "argument"}, kernel_fn("v3", k_sink("a0[i]"), ["float"],
                                         [("device float", "*opt", "[[buffer(5), function_constant(fc_b)]]")]), [])
+    # Every scalar and vector type as a function constant: as a value, through
+    # is_function_constant_defined, and as the predicate of an optional argument.
+    for s_, w in all_types():
+        t = vt(s_, w)
+        for use in ("value", "defined", "predicate"):
+            name = f"v{len(g.variants)}"
+            decl = f"constant {t} fc_{name} [[function_constant({len(g.variants) + 10})]];\n"
+            if use == "value":
+                text = decl + kernel_fn(name, k_sink(f"fc_{name}"), ["float"])
+            elif use == "defined":
+                text = decl + kernel_fn(name, k_sink(f"is_function_constant_defined(fc_{name})"), ["float"])
+            else:
+                text = decl + kernel_fn(name, k_sink("opt[i]"), ["float"],
+                                        [("device float", "*opt", f"[[buffer(5), function_constant(fc_{name})]]")])
+            g.add({"type": t, "use": use}, text, ["is_function_constant_defined"] if use == "defined" else [])
     return [g]
 
 
@@ -1022,7 +1197,7 @@ def fuzz_groups():
 def builder():
     groups = []
     for fn in (math_groups, conversion_groups, pack_groups, atomic_groups, sync_groups,
-               graphics_groups, texture_groups, imageblock_groups, indirect_groups,
+               graphics_groups, texture_groups, imageblock_groups, imageblock_sweep_groups, indirect_groups,
                function_table_groups, raytracing_groups, mesh_groups, tessellation_groups,
                function_constant_groups, uniform_groups, fuzz_groups):
         groups += fn()
@@ -1061,7 +1236,11 @@ def main():
         with open(os.path.join(here, fname), encoding="utf-8") as fh:
             text = fh.read()
         variants = []
+        profiles = [""]
         for line in text.splitlines():
+            if line.startswith("// profiles: "):
+                profiles = [p_.strip() for p_ in line[len("// profiles: "):].split(";")]
+                profiles = ["" if p_ == "default" else p_ for p_ in profiles]
             if line.startswith("// variant "):
                 index, params = line[len("// variant "):].split(": ", 1)
                 if int(index) != len(variants):
@@ -1070,10 +1249,13 @@ def main():
         path = os.path.join("msl", "msl_" + fname)
         with open(os.path.join(out, path), "w", encoding="utf-8") as fh:
             fh.write(text)
-        manifest["groups"].append({
-            "name": "msl_" + fname[:-len(".metal")], "chapter": "interface", "file": path,
-            "min_version": "1.1", "options": [], "variants": variants,
-        })
+        for profile in profiles:
+            # A "// profiles:" line compiles the file once per option set (default first).
+            suffix = "" if not profile else "__" + profile.lstrip("-").replace(" ", "_").replace("=", "_")
+            manifest["groups"].append({
+                "name": "msl_" + fname[:-len(".metal")] + suffix, "chapter": "interface", "file": path,
+                "min_version": "1.1", "options": profile.split() if profile else [], "variants": variants,
+            })
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1, sort_keys=True)
         fh.write("\n")
