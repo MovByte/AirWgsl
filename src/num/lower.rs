@@ -1,6 +1,9 @@
 //! The lowering rules: `air.*` and `llvm.*` numeric calls and floating-point instructions to WGSL over the carriers of
 //! [`super::Ty::carrier`].
 
+// The refusal is the compiler's only failure value (api::compile) and is returned by value throughout.
+#![allow(clippy::result_large_err)]
+
 use super::rows::{row_of, Decision, ROUNDING_ONLY};
 use super::{
     Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Rule, Scalar, Store, Target, Ty,
@@ -66,8 +69,6 @@ impl Ctx<'_> {
 
 /// Lower one operation. Operand expressions may be any WGSL expressions in their carriers; each is evaluated once,
 /// bound to a `let` named `{tmp}_{n}`. `ret` is the result type (`None` for a call without one).
-// The refusal is the compiler's only failure value and is returned by value throughout.
-#[allow(clippy::result_large_err)]
 pub fn lower(op: Op, args: &[Operand], ret: Option<Ty>, flags: FastMath, target: Target, tmp: &str) -> Result<Lowered, Refusal> {
     let construct = match op {
         Op::Call(name) => name.to_string(),
@@ -157,10 +158,11 @@ fn decide(c: &Ctx, row: &'static str, scalar: Scalar, fast: bool) -> R<(Rule, bo
         Decision::Native => Ok((Rule { row: Some(r.id), column, how: How::Native }, true)),
         Decision::SoftFloat => Ok((Rule { row: Some(r.id), column, how: How::SoftFloat }, false)),
         Decision::Polyfill => {
-            if let Rounding::Native(n) = c.target.rounding {
-                if ROUNDING_ONLY.contains(&r.id) && (r.id != "fma" || n.fused_fma()) {
-                    return Ok((Rule { row: Some(r.id), column, how: How::NativeRne }, true));
-                }
+            if let Rounding::Native(n) = c.target.rounding
+                && ROUNDING_ONLY.contains(&r.id)
+                && (r.id != "fma" || n.fused_fma())
+            {
+                return Ok((Rule { row: Some(r.id), column, how: How::NativeRne }, true));
             }
             Ok((Rule { row: Some(r.id), column, how: How::SoftFloat }, false))
         }
@@ -892,17 +894,17 @@ fn lower_air(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], ret: Option<Ty>,
         "pack" | "unpack" => lower_pack(c, head == "pack", &parts[1..], b, tys, ret),
         _ => {
             // Integer functions: air.<fn>.<s|u>.<type> or air.<fn>.<type>.
-            if let Some(&(f, arity)) = INT_FNS.iter().find(|(f, _)| *f == head) {
-                if !tys[0].scalar.is_float() {
-                    let (sg, suffix) = match parts.as_slice() {
-                        [_, "s", t] => (Some(true), *t),
-                        [_, "u", t] => (Some(false), *t),
-                        [_, t] if matches!(f, "clz" | "ctz" | "popcount" | "reverse_bits" | "rotate") => (None, *t),
-                        _ => return Err(c.malformed("integer function name")),
-                    };
-                    expect_suffix(c, suffix, tys[0])?;
-                    return lower_int(c, f, sg, arity, b, tys);
-                }
+            if let Some(&(f, arity)) = INT_FNS.iter().find(|(f, _)| *f == head)
+                && !tys[0].scalar.is_float()
+            {
+                let (sg, suffix) = match parts.as_slice() {
+                    [_, "s", t] => (Some(true), *t),
+                    [_, "u", t] => (Some(false), *t),
+                    [_, t] if matches!(f, "clz" | "ctz" | "popcount" | "reverse_bits" | "rotate") => (None, *t),
+                    _ => return Err(c.malformed("integer function name")),
+                };
+                expect_suffix(c, suffix, tys[0])?;
+                return lower_int(c, f, sg, arity, b, tys);
             }
             let (fast, stem) = match head.strip_prefix("fast_") {
                 Some(s) => (true, s),

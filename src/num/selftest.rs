@@ -146,7 +146,7 @@ pub fn cases() -> Vec<Case> {
         }
     }
     // A seeded random set over normal operands with nearby exponents.
-    let mut r = Mix(0x5eed_0f_f001);
+    let mut r = Mix(0x005e_ed0f_f001);
     for k in 0..4096u32 {
         let x = r.next();
         let ea = 64 + (x as u32 % 128);

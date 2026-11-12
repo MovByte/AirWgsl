@@ -117,21 +117,21 @@ impl Library {
                 return Err(LibraryError(format!("{} is defined twice", item.name)));
             }
         }
-        for i in 0..items.len() {
-            let code = strip_comments(&items[i].text);
+        for item in items.iter_mut() {
+            let code = strip_comments(&item.text);
             let mut deps = BTreeSet::new();
             for id in identifiers(&code) {
-                if !id.starts_with(PREFIX) || id == items[i].name {
+                if !id.starts_with(PREFIX) || id == item.name {
                     continue;
                 }
                 match by_name.get(id) {
                     Some(&d) => {
                         deps.insert(d);
                     }
-                    None => return Err(LibraryError(format!("{} names {}, which the library does not define", items[i].name, id))),
+                    None => return Err(LibraryError(format!("{} names {}, which the library does not define", item.name, id))),
                 }
             }
-            items[i].deps = deps.into_iter().collect();
+            item.deps = deps.into_iter().collect();
         }
         Ok(Library { items, by_name })
     }
