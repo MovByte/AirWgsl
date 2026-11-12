@@ -26,6 +26,16 @@ use super::{Canonical, ENTRY_LISTS, record_function, specialize};
 ///
 /// A global whose value the canonicalization could not determine has no entry; reflection then refuses the
 /// binding or argument that needs it, naming the global.
+///
+/// How `unused_arguments` compares with the activity real Metal reports (Apple M4, macOS 27.0.1; 627 pipelines of 36
+/// system metallibs, function constants zero; `examples/reflect_activity.rs` and `tests/canon/reflect_activity.py`):
+/// for functions with function constants, which Metal specializes and optimizes again, an argument is active
+/// exactly when the front end did not mark it unused and the canonical function uses it in 220 of 247 cases, against
+/// 181 with the front end's marks alone; in the other 27 Metal's optimizer removed the use by algebraic
+/// simplification (a value shifted out of a truncation, for one), which constant folding does not do. For functions
+/// without function constants the front end's marks alone agree in 1763 of 1792 cases and this set in 1701: Metal
+/// reports active most of the arguments that only callees ignoring them received (textures passed by value in
+/// `texture2d` structs), and inactive the buffers and samplers this set finds unused that the front end did not mark.
 pub fn inputs(c: &Canonical) -> Inputs {
     let m = &c.module;
     let back: BTreeMap<u32, u32> = c.globals.iter().map(|(s, d)| (*d, *s)).collect();
