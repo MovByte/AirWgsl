@@ -180,9 +180,18 @@ pub const ITEMS: &[Item] = &[
     },
     Item {
         id: "varying-mismatch",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a fragment input that no vertex output of the same name writes, or whose type differs from it other \
+                  than in the sign of an integer (real Metal refuses the pipeline: \"Fragment input(s) mismatching vertex \
+                  shader output type(s) or not written by vertex shader\", measured)",
+        reference: "plan 5.10",
+    },
+    Item {
+        id: "varying-type",
         owner: Some("S6b"),
         kind: RefusalKind::NotImplemented,
-        summary: "a fragment input whose type or interpolation differs from the vertex output of the same name",
+        summary: "a varying whose type has no WGSL inter-stage form (scalars and vectors of up to 4 lanes are lowered)",
         reference: "plan 5.10",
     },
     Item {

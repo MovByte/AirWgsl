@@ -9,7 +9,7 @@
 //! lowers it. Each mapping is justified by the clause cited at it.
 
 use super::tracked;
-use crate::air::{Argument, EntryPoint, Interpolation, OutputRole, Role, Sampling, Slot};
+use crate::air::{EntryPoint, Interpolation, OutputRole, Role, Sampling, Slot};
 use crate::api::{
     ComputeState, HostCaps, Location, MetalStage, PipelineDesc, PipelineKind, Refusal, RefusalKind, StageBindings,
     UniformValue,
@@ -23,10 +23,27 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Varying {
     pub location: u32,
-    /// WGSL type (`f32`, `vec4<f32>`, `vec2<i32>`, ...).
+    /// WGSL type (`f32`, `vec4<f32>`, `vec2<u32>`, ...).
     pub wgsl: String,
     /// `@interpolate(...)`, or empty for the WGSL default.
     pub interp: String,
+    /// The IR type of the fragment input (the vertex output of the same name must have it).
+    pub ir: TypeKey,
+}
+
+/// An IR scalar or vector type, compared across the two stages' modules: (lanes, scalar), the scalar `f` for float,
+/// `h` for half and the bit width for integers.
+pub type TypeKey = (u32, String);
+
+fn type_key(m: &Module, t: TypeId) -> TypeKey {
+    let (n, e) = lanes(m, t);
+    let s = match m.types.get(e) {
+        Type::Float => "f".to_string(),
+        Type::Half => "h".to_string(),
+        Type::Int(b) => format!("i{}", b),
+        other => format!("{:?}", other),
+    };
+    (n, s)
 }
 
 /// The varyings of a render pipeline, by name (`user(...)`, `generated(...)`).
@@ -169,7 +186,7 @@ fn from_u32(m: &Module, w: &str, t: TypeId) -> Option<String> {
     }
 }
 
-/// The WGSL type, interpolation and carrier conversions of a varying of IR type `t`, MSL type name `tn`.
+/// The WGSL type, interpolation and carrier conversions of a varying of IR type `t`.
 struct VaryingType {
     wgsl: String,
     integer: bool,
@@ -179,7 +196,7 @@ struct VaryingType {
     inp: String,
 }
 
-fn varying_type(m: &Module, t: TypeId, tn: Option<&str>, prelude: &mut Vec<&'static str>) -> Option<VaryingType> {
+fn varying_type(m: &Module, t: TypeId, prelude: &mut Vec<&'static str>) -> Option<VaryingType> {
     let (n, e) = lanes(m, t);
     if n > 4 {
         return None;
@@ -213,28 +230,15 @@ fn varying_type(m: &Module, t: TypeId, tn: Option<&str>, prelude: &mut Vec<&'sta
             let inp = lane_out(&|x| format!("({} != 0u)", x)).replace("VEC", &vec_of("bool", n));
             Some(VaryingType { wgsl: vec_of("u32", n), integer: true, out, inp })
         }
+        // Integer varyings carry their bits flat: real Metal links a signed output to an unsigned input of the same
+        // width and the reverse (measured), so both travel as the carrier's zero-extended bits whatever the sign.
         Type::Int(b @ (8 | 16 | 32)) => {
-            let signed = matches!(tn.and_then(msl_type), Some(("sint", _)));
             let mask = if *b == 32 { None } else { Some((1u64 << b) - 1) };
-            if signed {
-                prelude.push("nm_sext");
-                let out = lane_out(&|x| {
-                    if *b == 32 { format!("bitcast<i32>({})", x) } else { format!("nm_sext({}, {}u)", x, b) }
-                })
-                .replace("VEC", &vec_of("i32", n));
-                let inp = lane_out(&|x| match mask {
-                    Some(mk) => format!("(bitcast<u32>({}) & {}u)", x, mk),
-                    None => format!("bitcast<u32>({})", x),
-                })
-                .replace("VEC", &vec_of("u32", n));
-                Some(VaryingType { wgsl: vec_of("i32", n), integer: true, out, inp })
-            } else {
-                let inp = match mask {
-                    Some(mk) => lane_out(&|x| format!("({} & {}u)", x, mk)).replace("VEC", &vec_of("u32", n)),
-                    None => "{}".to_string(),
-                };
-                Some(VaryingType { wgsl: vec_of("u32", n), integer: true, out: "{}".into(), inp })
-            }
+            let inp = match mask {
+                Some(mk) => lane_out(&|x| format!("({} & {}u)", x, mk)).replace("VEC", &vec_of("u32", n)),
+                None => "{}".to_string(),
+            };
+            Some(VaryingType { wgsl: vec_of("u32", n), integer: true, out: "{}".into(), inp })
         }
         _ => None,
     }
@@ -286,36 +290,42 @@ pub fn varyings(v: Option<(&Module, &EntryPoint)>, f: Option<(&Module, &EntryPoi
     let mut prelude = Vec::new();
     if let Some((m, e)) = f {
         let fi = e.function as usize;
-        let mut names: Vec<(String, TypeId, &Argument, Option<Interpolation>)> = Vec::new();
+        let mut names: Vec<(String, TypeId, Option<Interpolation>)> = Vec::new();
         for a in &e.arguments {
             if let Role::FragmentInput { name, interpolation, interpolant } = &a.role {
                 if interpolant.is_some() {
                     return Err(pull_model(m, fi));
                 }
                 let t = m.functions[fi].args[a.position as usize].ty;
-                names.push((name.clone(), t, a, *interpolation));
+                names.push((name.clone(), t, *interpolation));
             }
         }
         names.sort_by(|a, b| a.0.cmp(&b.0));
-        for (k, (n, t, a, i)) in names.into_iter().enumerate() {
-            let vt = varying_type(m, t, a.type_name.as_deref(), &mut prelude).ok_or_else(|| {
-                tracked::refuse("varying-mismatch", n.clone(), loc(m, fi), "a varying type without a WGSL form")
+        for (k, (n, t, i)) in names.into_iter().enumerate() {
+            let vt = varying_type(m, t, &mut prelude).ok_or_else(|| {
+                tracked::refuse("varying-type", n.clone(), loc(m, fi), "a varying type without a WGSL form")
             })?;
-            out.insert(n, Varying { location: k as u32, wgsl: vt.wgsl, interp: interpolation(i, vt.integer) });
+            out.insert(
+                n,
+                Varying { location: k as u32, wgsl: vt.wgsl, interp: interpolation(i, vt.integer), ir: type_key(m, t) },
+            );
         }
     }
     if let Some((m, e)) = v {
         let fi = e.function as usize;
         let (members, _) = ret_members(m, fi);
-        let mut extra: Vec<(String, TypeId, Option<String>)> = Vec::new();
+        let mut extra: Vec<(String, TypeId)> = Vec::new();
+        let mut written = std::collections::BTreeSet::new();
         for (k, o) in e.outputs.iter().enumerate() {
             if let OutputRole::VertexOutput(n) = &o.role
                 && let Some(t) = members.get(k)
             {
+                written.insert(n.clone());
                 match out.get(n) {
+                    // Real Metal requires the same type on both sides, the sign of integers aside (measured: float and
+                    // half, different component counts, and integers of different widths are refused).
                     Some(v) => {
-                        let vt = varying_type(m, *t, o.type_name.as_deref(), &mut prelude);
-                        if vt.map(|vt| vt.wgsl) != Some(v.wgsl.clone()) {
+                        if type_key(m, *t) != v.ir {
                             return Err(tracked::refuse(
                                 "varying-mismatch",
                                 n.clone(),
@@ -324,19 +334,27 @@ pub fn varyings(v: Option<(&Module, &EntryPoint)>, f: Option<(&Module, &EntryPoi
                             ));
                         }
                     }
-                    None if f.is_none() => extra.push((n.clone(), *t, o.type_name.clone())),
+                    None if f.is_none() => extra.push((n.clone(), *t)),
                     None => {}
                 }
             }
         }
+        if let Some(n) = out.keys().find(|n| !written.contains(*n)) {
+            return Err(tracked::refuse(
+                "varying-mismatch",
+                n.clone(),
+                loc(m, fi),
+                "no vertex output of this name writes the fragment input",
+            ));
+        }
         extra.sort_by(|a, b| a.0.cmp(&b.0));
         let base = out.len() as u32;
-        for (k, (n, t, tn)) in extra.into_iter().enumerate() {
-            let vt = varying_type(m, t, tn.as_deref(), &mut prelude).ok_or_else(|| {
-                tracked::refuse("varying-mismatch", n.clone(), loc(m, fi), "a varying type without a WGSL form")
+        for (k, (n, t)) in extra.into_iter().enumerate() {
+            let vt = varying_type(m, t, &mut prelude).ok_or_else(|| {
+                tracked::refuse("varying-type", n.clone(), loc(m, fi), "a varying type without a WGSL form")
             })?;
             let interp = interpolation(None, vt.integer);
-            out.insert(n, Varying { location: base + k as u32, wgsl: vt.wgsl, interp });
+            out.insert(n, Varying { location: base + k as u32, wgsl: vt.wgsl, interp, ir: type_key(m, t) });
         }
     }
     Ok(out)
@@ -662,8 +680,8 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
                     tracked::refuse("varying-mismatch", n.clone(), loc(m, fi), "no vertex output of this name")
                 })?;
                 let mut pre = Vec::new();
-                let vt = varying_type(m, t, r.type_name.as_deref(), &mut pre).ok_or_else(|| {
-                    tracked::refuse("varying-mismatch", n.clone(), loc(m, fi), "a varying type without a WGSL form")
+                let vt = varying_type(m, t, &mut pre).ok_or_else(|| {
+                    tracked::refuse("varying-type", n.clone(), loc(m, fi), "a varying type without a WGSL form")
                 })?;
                 it.prelude.extend(pre);
                 let p = format!("aw_in{}", v.location);
@@ -752,8 +770,8 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
             (OutputRole::VertexOutput(n), MetalStage::Vertex) => match cx.varyings.get(n) {
                 Some(v) => {
                     let mut pre = Vec::new();
-                    let vt = varying_type(m, *t, o.type_name.as_deref(), &mut pre).ok_or_else(|| {
-                        tracked::refuse("varying-mismatch", n.clone(), loc(m, fi), "a varying type without a WGSL form")
+                    let vt = varying_type(m, *t, &mut pre).ok_or_else(|| {
+                        tracked::refuse("varying-type", n.clone(), loc(m, fi), "a varying type without a WGSL form")
                     })?;
                     it.prelude.extend(pre);
                     fields.push(format!("@location({}) {} {}: {}", v.location, v.interp, field, v.wgsl));
