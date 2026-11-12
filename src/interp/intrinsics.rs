@@ -794,9 +794,16 @@ impl Interp<'_> {
                 if indefinite {
                     Val::S(Scalar::undef(w))
                 } else {
-                    let lo = mix(seed, *k) as u128;
-                    let hi = mix(seed ^ 0x9e37_79b9_7f4a_7c15, *k) as u128;
-                    Val::S(Scalar::int((lo | hi << 64) & mask(w)))
+                    // Any fixed function is an uninterpreted function; this one keeps its values in the ranges shaders
+                    // use them in (integers below 64, as sizes and indices; floats in [-4, 4), never NaN or
+                    // infinite), so that runs reach past them instead of looping on a huge size or turning fast-math
+                    // code into poison.
+                    let h = mix(seed, *k);
+                    let bits = match self.prim_of(fr, TyRef::Id(ty))? {
+                        Prim::Float(f) => f.from_f64(((h % 8000) as f64 - 4000.0) / 1000.0) as u128,
+                        _ => (h % 64) as u128 & mask(w),
+                    };
+                    Val::S(Scalar::int(bits))
                 }
             }
         })

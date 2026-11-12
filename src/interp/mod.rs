@@ -31,7 +31,8 @@
 //! - [`Externals::Refuse`]: the call is unsupported. This is the mode for comparisons against real Metal, where every
 //!   value must be the one the specification defines.
 //! - [`Externals::Uninterpreted`]: the call is an uninterpreted function consistent with its memory effects: its
-//!   result is a fixed function (a hash) of the callee, the arguments and the state it may read; a call that may
+//!   result is a fixed function (a hash, mapped to integers below 64 and floats in [-4, 4)) of the callee, the
+//!   arguments and the state it may read; a call that may
 //!   write state the interpreter models as bytes is unsupported; a call that writes only objects or state outside
 //!   the module (textures, barriers) is recorded as an event and bumps the written objects' versions. A pass is
 //!   correct for every implementation of such a function exactly when it is correct for an uninterpreted one, which
