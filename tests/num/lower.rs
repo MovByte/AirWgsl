@@ -598,8 +598,11 @@ fn bit_functions_match_msl_table_6_2() {
                 decode(&w[..2 * wl], 2, 2, n)
                     .iter()
                     .flat_map(|l| {
-                        let mask = if bits == 64 { u64::MAX } else { ((1u64 << bits) - 1) << off };
-                        to_words(m((l[0] & !mask) | ((l[1] << off) & mask)), n)
+                        // An offset of the full width (with 0 bits) inserts nothing: MSL leaves only offset + bits
+                        // above the width undefined, so the shifts must not overflow there.
+                        let mask =
+                            if bits == 64 { u64::MAX } else { ((1u64 << bits) - 1).checked_shl(off).unwrap_or(0) };
+                        to_words(m((l[0] & !mask) | (l[1].checked_shl(off).unwrap_or(0) & mask)), n)
                     })
                     .collect()
             });
