@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use super::codes::*;
 use super::constants::Use;
-use super::{Reader, Result, Slot, FWD};
+use super::{FWD, Reader, Result, Slot};
 use crate::bitstream::Entry;
 use crate::ir::*;
 
@@ -15,7 +15,10 @@ use crate::ir::*;
 enum RawMd {
     Ready(MdId),
     /// Operands are bitcode metadata ids plus one; zero is null.
-    Tuple { distinct: bool, ops: Vec<u64> },
+    Tuple {
+        distinct: bool,
+        ops: Vec<u64>,
+    },
     ArgList(Vec<u64>),
 }
 
@@ -283,7 +286,8 @@ impl<'a> Reader<'a> {
                 if id >= FWD as u64 {
                     return self.malformed("metadata value number out of range");
                 }
-                let md = self.m.push_md(Metadata::Local { function: f, ty, value: Value::Inst(InstId(FWD | id as u32)) });
+                let md =
+                    self.m.push_md(Metadata::Local { function: f, ty, value: Value::Inst(InstId(FWD | id as u32)) });
                 self.md.pending_local.push((md, f, id as u32));
                 return Ok(md);
             }
@@ -383,7 +387,8 @@ impl<'a> Reader<'a> {
                     }
                     self.m.intern_md(Metadata::ArgList(items))
                 } else {
-                    let resolved: Vec<Option<MdId>> = ops.iter().map(|&op| resolve_op(&self.md.list, op).unwrap()).collect();
+                    let resolved: Vec<Option<MdId>> =
+                        ops.iter().map(|&op| resolve_op(&self.md.list, op).unwrap()).collect();
                     self.m.intern_md(Metadata::Tuple { distinct: false, ops: resolved })
                 };
                 self.md.list[first + i] = id;
@@ -497,7 +502,10 @@ impl<'a> Reader<'a> {
         let zero_md = self.m.intern_md(Metadata::Value { ty: i64t, value: Value::Const(zero) });
         if ops.len() == 3 {
             let scalar = self.m.intern_md(Metadata::Tuple { distinct: false, ops: vec![ops[0], ops[1]] });
-            return self.m.intern_md(Metadata::Tuple { distinct: false, ops: vec![Some(scalar), Some(scalar), Some(zero_md), ops[2]] });
+            return self.m.intern_md(Metadata::Tuple {
+                distinct: false,
+                ops: vec![Some(scalar), Some(scalar), Some(zero_md), ops[2]],
+            });
         }
         self.m.intern_md(Metadata::Tuple { distinct: false, ops: vec![Some(md), Some(md), Some(zero_md)] })
     }

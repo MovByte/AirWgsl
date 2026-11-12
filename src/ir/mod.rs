@@ -20,9 +20,9 @@
 //!   instructions by [`InstId`]. A declaration has no blocks.
 //! - [`Op`] covers LLVM 21's instructions other than those the reader refuses (exception handling, `callbr`, and
 //!   calls of inline assembly): arithmetic, casts (including `ptrtoint`, `inttoptr` and `addrspacecast`),
-//!   comparisons, memory access and atomics, aggregates and vectors, `freeze`, `va_arg`, calls and the terminators. A call of an intrinsic (`llvm.*`,
-//!   or AIR's `air.*`) is an ordinary [`Op::Call`] of a declared function; LLVM's own intrinsics carry the attributes
-//!   LLVM 21's intrinsic tables give them.
+//!   comparisons, memory access and atomics, aggregates and vectors, `freeze`, `va_arg`, calls and the terminators.
+//!   A call of an intrinsic (`llvm.*`, or AIR's `air.*`) is an ordinary [`Op::Call`] of a declared function; LLVM's
+//!   own intrinsics carry the attributes LLVM 21's intrinsic tables give them.
 //! - Metadata is pooled and uniqued like LLVM's: strings by content, value wrappers by value, and non-distinct tuples
 //!   by operands; distinct tuples are never merged.
 //!
@@ -101,7 +101,7 @@ pub enum Value {
     InlineAsm(u32),
 }
 
-// Global values --------------------------------------------------------------------------------------------------------
+// Global values -------------------------------------------------------------------------------------------------------
 
 /// `GlobalValue::LinkageTypes`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -348,25 +348,58 @@ pub enum ConstKind {
     DataVector(Vec<u64>),
     Expr(ConstExpr),
     /// `blockaddress(@function, %block)`.
-    BlockAddress { function: u32, block: BlockId },
+    BlockAddress {
+        function: u32,
+        block: BlockId,
+    },
     /// `dso_local_equivalent @g`.
     DsoLocalEquivalent(GlobalId),
     /// `no_cfi @g`.
     NoCfi(GlobalId),
     /// `ptrauth (ptr, i32 key, i64 disc, ptr addrdisc)`.
-    PtrAuth { ptr: Value, key: Value, disc: Value, addr_disc: Value },
+    PtrAuth {
+        ptr: Value,
+        key: Value,
+        disc: Value,
+        addr_disc: Value,
+    },
 }
 
 /// A constant expression. Its operands are constants or globals.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ConstExpr {
     /// A cast to the constant's type.
-    Cast { op: CastOp, value: Value },
-    Binary { op: BinOp, lhs: Value, rhs: Value, flags: u8 },
-    Gep { source: TypeId, flags: GepFlags, inrange: Option<ConstantRange>, ptr: Value, indices: Vec<Value> },
-    ExtractElement { vec: Value, idx: Value },
-    InsertElement { vec: Value, elt: Value, idx: Value },
-    ShuffleVector { a: Value, b: Value, mask: Vec<i32> },
+    Cast {
+        op: CastOp,
+        value: Value,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+        flags: u8,
+    },
+    Gep {
+        source: TypeId,
+        flags: GepFlags,
+        inrange: Option<ConstantRange>,
+        ptr: Value,
+        indices: Vec<Value>,
+    },
+    ExtractElement {
+        vec: Value,
+        idx: Value,
+    },
+    InsertElement {
+        vec: Value,
+        elt: Value,
+        idx: Value,
+    },
+    ShuffleVector {
+        a: Value,
+        b: Value,
+        mask: Vec<i32>,
+    },
 }
 
 // Instructions --------------------------------------------------------------------------------------------------------
@@ -756,26 +789,99 @@ pub struct Instruction {
 /// What an instruction does, with its operands.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    FNeg { value: Value, fmf: FastMath },
-    Binary { op: BinOp, lhs: Value, rhs: Value, flags: u8, fmf: FastMath },
+    FNeg {
+        value: Value,
+        fmf: FastMath,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+        flags: u8,
+        fmf: FastMath,
+    },
     /// A cast to the instruction's type. `flags`: [`flags::NNEG`] (zext, uitofp), [`flags::NUW`]/[`flags::NSW`]
     /// (trunc).
-    Cast { op: CastOp, value: Value, flags: u8, fmf: FastMath },
-    ICmp { pred: IntPredicate, lhs: Value, rhs: Value, samesign: bool },
-    FCmp { pred: FloatPredicate, lhs: Value, rhs: Value, fmf: FastMath },
-    Select { cond: Value, t: Value, f: Value, fmf: FastMath },
-    Phi { incoming: Vec<(Value, BlockId)>, fmf: FastMath },
-    Alloca { allocated: TypeId, count: Value, align: u64, addrspace: u32, inalloca: bool, swifterror: bool },
+    Cast {
+        op: CastOp,
+        value: Value,
+        flags: u8,
+        fmf: FastMath,
+    },
+    ICmp {
+        pred: IntPredicate,
+        lhs: Value,
+        rhs: Value,
+        samesign: bool,
+    },
+    FCmp {
+        pred: FloatPredicate,
+        lhs: Value,
+        rhs: Value,
+        fmf: FastMath,
+    },
+    Select {
+        cond: Value,
+        t: Value,
+        f: Value,
+        fmf: FastMath,
+    },
+    Phi {
+        incoming: Vec<(Value, BlockId)>,
+        fmf: FastMath,
+    },
+    Alloca {
+        allocated: TypeId,
+        count: Value,
+        align: u64,
+        addrspace: u32,
+        inalloca: bool,
+        swifterror: bool,
+    },
     /// A load of the instruction's type.
-    Load { ptr: Value, align: u64, volatile: bool, atomic: Option<Atomic> },
-    Store { value: Value, ptr: Value, align: u64, volatile: bool, atomic: Option<Atomic> },
-    Gep { source: TypeId, ptr: Value, indices: Vec<Value>, flags: GepFlags },
-    ExtractElement { vec: Value, idx: Value },
-    InsertElement { vec: Value, elt: Value, idx: Value },
+    Load {
+        ptr: Value,
+        align: u64,
+        volatile: bool,
+        atomic: Option<Atomic>,
+    },
+    Store {
+        value: Value,
+        ptr: Value,
+        align: u64,
+        volatile: bool,
+        atomic: Option<Atomic>,
+    },
+    Gep {
+        source: TypeId,
+        ptr: Value,
+        indices: Vec<Value>,
+        flags: GepFlags,
+    },
+    ExtractElement {
+        vec: Value,
+        idx: Value,
+    },
+    InsertElement {
+        vec: Value,
+        elt: Value,
+        idx: Value,
+    },
     /// `mask` elements are lane numbers or -1 for poison.
-    ShuffleVector { a: Value, b: Value, mask: Vec<i32> },
-    ExtractValue { agg: Value, indices: Vec<u32> },
-    InsertValue { agg: Value, value: Value, indices: Vec<u32> },
+    ShuffleVector {
+        a: Value,
+        b: Value,
+        mask: Vec<i32>,
+    },
+    ExtractValue {
+        agg: Value,
+        indices: Vec<u32>,
+    },
+    InsertValue {
+        agg: Value,
+        value: Value,
+        indices: Vec<u32>,
+    },
     Call {
         callee: Value,
         fn_ty: TypeId,
@@ -786,8 +892,18 @@ pub enum Op {
         fmf: FastMath,
         bundles: Vec<Bundle>,
     },
-    Freeze { value: Value },
-    AtomicRmw { op: RmwOp, ptr: Value, value: Value, align: u64, volatile: bool, ordering: Ordering, scope: u32 },
+    Freeze {
+        value: Value,
+    },
+    AtomicRmw {
+        op: RmwOp,
+        ptr: Value,
+        value: Value,
+        align: u64,
+        volatile: bool,
+        ordering: Ordering,
+        scope: u32,
+    },
     CmpXchg {
         ptr: Value,
         cmp: Value,
@@ -799,19 +915,47 @@ pub enum Op {
         failure: Ordering,
         scope: u32,
     },
-    Fence { ordering: Ordering, scope: u32 },
-    VaArg { list: Value },
-    Ret { value: Option<Value> },
-    Br { dest: BlockId },
-    CondBr { cond: Value, t: BlockId, f: BlockId },
-    Switch { cond: Value, default: BlockId, cases: Vec<(ConstId, BlockId)> },
-    IndirectBr { addr: Value, dests: Vec<BlockId> },
+    Fence {
+        ordering: Ordering,
+        scope: u32,
+    },
+    VaArg {
+        list: Value,
+    },
+    Ret {
+        value: Option<Value>,
+    },
+    Br {
+        dest: BlockId,
+    },
+    CondBr {
+        cond: Value,
+        t: BlockId,
+        f: BlockId,
+    },
+    Switch {
+        cond: Value,
+        default: BlockId,
+        cases: Vec<(ConstId, BlockId)>,
+    },
+    IndirectBr {
+        addr: Value,
+        dests: Vec<BlockId>,
+    },
     Unreachable,
 }
 
 impl Op {
     pub fn is_terminator(&self) -> bool {
-        matches!(self, Op::Ret { .. } | Op::Br { .. } | Op::CondBr { .. } | Op::Switch { .. } | Op::IndirectBr { .. } | Op::Unreachable)
+        matches!(
+            self,
+            Op::Ret { .. }
+                | Op::Br { .. }
+                | Op::CondBr { .. }
+                | Op::Switch { .. }
+                | Op::IndirectBr { .. }
+                | Op::Unreachable
+        )
     }
 
     /// The instruction's value operands in LLVM's operand order, without block operands.
@@ -856,7 +1000,9 @@ impl Op {
         match self {
             Op::Br { dest } => vec![*dest],
             Op::CondBr { t, f, .. } => vec![*t, *f],
-            Op::Switch { default, cases, .. } => std::iter::once(*default).chain(cases.iter().map(|(_, b)| *b)).collect(),
+            Op::Switch { default, cases, .. } => {
+                std::iter::once(*default).chain(cases.iter().map(|(_, b)| *b)).collect()
+            }
             Op::IndirectBr { dests, .. } => dests.clone(),
             _ => vec![],
         }

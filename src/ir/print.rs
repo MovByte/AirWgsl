@@ -68,7 +68,8 @@ pub fn escape(out: &mut String, bytes: &[u8]) {
 /// `printLLVMNameWithoutPrefix`.
 fn llvm_name(out: &mut String, name: &str) {
     let b = name.as_bytes();
-    let needs_quotes = b[0].is_ascii_digit() || b.iter().any(|&c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'.' || c == b'_'));
+    let needs_quotes =
+        b[0].is_ascii_digit() || b.iter().any(|&c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'.' || c == b'_'));
     if needs_quotes {
         out.push('"');
         escape(out, b);
@@ -322,7 +323,13 @@ impl BigUint {
 
 /// `IEEEFloat::toString(Str, FormatPrecision, FormatMaxPadding = 0, TruncateZero = false)` for a finite non-zero
 /// value `significand * 2^exp` (the `toStringImpl` path), with `FormatPrecision` given.
-fn apfloat_to_string(negative: bool, mut exp: i32, significand: u64, precision_bits: u32, format_precision: u32) -> String {
+fn apfloat_to_string(
+    negative: bool,
+    mut exp: i32,
+    significand: u64,
+    precision_bits: u32,
+    format_precision: u32,
+) -> String {
     let mut out = String::new();
     if negative {
         out.push('-');
@@ -437,7 +444,8 @@ pub fn float_text(kind: FloatKind, bits: u128) -> String {
             };
             let max_exp = (1 << ebits) - 1;
             let bias = (1 << (ebits - 1)) - 1;
-            let value: f64 = if kind == FloatKind::Float { f32::from_bits(bits as u32) as f64 } else { f64::from_bits(bits as u64) };
+            let value: f64 =
+                if kind == FloatKind::Float { f32::from_bits(bits as u32) as f64 } else { f64::from_bits(bits as u64) };
             if exp_bits != max_exp {
                 let s = if exp_bits == 0 && mant == 0 {
                     // Zero: "0.000000e+00".
@@ -457,11 +465,7 @@ pub fn float_text(kind: FloatKind, bits: u128) -> String {
                 }
             }
             // Hexadecimal, as a double.
-            let d: u64 = if kind == FloatKind::Double {
-                bits as u64
-            } else {
-                float_to_double_bits(bits as u32)
-            };
+            let d: u64 = if kind == FloatKind::Double { bits as u64 } else { float_to_double_bits(bits as u32) };
             format!("0x{:X}", d)
         }
         FloatKind::Half => format!("0xH{:04X}", bits as u16),
@@ -516,7 +520,7 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Slots ------------------------------------------------------------------------------------------------------
+    // Slots -----------------------------------------------------------------------------------------------------------
 
     fn md_slot(&mut self, id: MdId) {
         // `CreateMetadataSlot`: pre-order over node operands. Only nodes get slots.
@@ -648,12 +652,19 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Types ------------------------------------------------------------------------------------------------------
+    // Types -----------------------------------------------------------------------------------------------------------
 
     /// `TypeFinder::run` and `TypePrinting::incorporateTypes`.
     fn find_types(&mut self) {
         let m = self.m;
-        let mut tf = TypeFinder { m, visited_types: HashSet::new(), visited_consts: HashSet::new(), visited_md: HashSet::new(), visited_attrs: HashSet::new(), structs: Vec::new() };
+        let mut tf = TypeFinder {
+            m,
+            visited_types: HashSet::new(),
+            visited_consts: HashSet::new(),
+            visited_md: HashSet::new(),
+            visited_attrs: HashSet::new(),
+            structs: Vec::new(),
+        };
         for g in &m.globals {
             tf.ty(g.value_type);
             if let Some(i) = g.initializer {
@@ -842,7 +853,7 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Attributes -------------------------------------------------------------------------------------------------
+    // Attributes ------------------------------------------------------------------------------------------------------
 
     fn attr_to(&self, out: &mut String, a: &Attribute, in_group: bool) {
         match a {
@@ -862,7 +873,11 @@ impl<'m> Printer<'m> {
                         let _ = if in_group { write!(out, "align={}", v) } else { write!(out, "align {}", v) };
                     }
                     AttrKind::StackAlignment | AttrKind::Dereferenceable | AttrKind::DereferenceableOrNull => {
-                        let _ = if in_group { write!(out, "{}={}", k.name(), v) } else { write!(out, "{}({})", k.name(), v) };
+                        let _ = if in_group {
+                            write!(out, "{}={}", k.name(), v)
+                        } else {
+                            write!(out, "{}({})", k.name(), v)
+                        };
                     }
                     AttrKind::AllocSize => {
                         // Packed as (elem size << 32) | num elems, with u32::MAX for none.
@@ -882,7 +897,8 @@ impl<'m> Printer<'m> {
                     AttrKind::UWTable => out.push_str(if v == 2 { "uwtable" } else { "uwtable(sync)" }),
                     AttrKind::AllocKind => {
                         let names = ["alloc", "realloc", "free", "uninitialized", "zeroed", "aligned"];
-                        let parts: Vec<&str> = names.iter().enumerate().filter(|(i, _)| v & (1 << i) != 0).map(|(_, n)| *n).collect();
+                        let parts: Vec<&str> =
+                            names.iter().enumerate().filter(|(i, _)| v & (1 << i) != 0).map(|(_, n)| *n).collect();
                         let _ = write!(out, "allockind(\"{}\")", parts.join(","));
                     }
                     AttrKind::Memory => out.push_str(&memory_string(v)),
@@ -894,7 +910,13 @@ impl<'m> Printer<'m> {
                 }
             }
             Attribute::Range(_, cr) => {
-                let _ = write!(out, "range(i{} {}, {})", cr.bits, int_decimal(&cr.lower, cr.bits), int_decimal(&cr.upper, cr.bits));
+                let _ = write!(
+                    out,
+                    "range(i{} {}, {})",
+                    cr.bits,
+                    int_decimal(&cr.lower, cr.bits),
+                    int_decimal(&cr.upper, cr.bits)
+                );
             }
             Attribute::RangeList(_, list) => {
                 out.push_str("initializes(");
@@ -928,7 +950,7 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Values -----------------------------------------------------------------------------------------------------
+    // Values ----------------------------------------------------------------------------------------------------------
 
     fn value_type(&self, v: Value) -> TypeId {
         let m = self.m;
@@ -1057,7 +1079,11 @@ impl<'m> Printer<'m> {
         match &c.kind {
             ConstKind::DataVector(e) => {
                 if e.iter().all(|x| *x == e[0]) {
-                    let k = if self.m.types.is_int(elem) { ConstKind::Int(vec![e[0]]) } else { ConstKind::Float(e[0] as u128) };
+                    let k = if self.m.types.is_int(elem) {
+                        ConstKind::Int(vec![e[0]])
+                    } else {
+                        ConstKind::Float(e[0] as u128)
+                    };
                     Some((elem, k))
                 } else {
                     None
@@ -1143,7 +1169,10 @@ impl<'m> Printer<'m> {
                 out.push(']');
             }
             ConstKind::Struct(elems) => {
-                let packed = matches!(m.types.get(c.ty), Type::LiteralStruct { packed: true, .. } | Type::Struct { packed: true, .. });
+                let packed = matches!(
+                    m.types.get(c.ty),
+                    Type::LiteralStruct { packed: true, .. } | Type::Struct { packed: true, .. }
+                );
                 if packed {
                     out.push('<');
                 }
@@ -1191,7 +1220,11 @@ impl<'m> Printer<'m> {
                             }
                             self.type_to(out, et);
                             out.push(' ');
-                            let k = if m.types.is_int(et) { ConstKind::Int(vec![*e]) } else { ConstKind::Float(*e as u128) };
+                            let k = if m.types.is_int(et) {
+                                ConstKind::Int(vec![*e])
+                            } else {
+                                ConstKind::Float(*e as u128)
+                            };
                             self.scalar_text(out, et, &k);
                         }
                     }
@@ -1200,7 +1233,10 @@ impl<'m> Printer<'m> {
                 out.push('>');
             }
             ConstKind::Expr(e) => self.const_expr_to(out, c.ty, e),
-            ConstKind::BlockAddress { .. } | ConstKind::DsoLocalEquivalent(_) | ConstKind::NoCfi(_) | ConstKind::PtrAuth { .. } => {
+            ConstKind::BlockAddress { .. }
+            | ConstKind::DsoLocalEquivalent(_)
+            | ConstKind::NoCfi(_)
+            | ConstKind::PtrAuth { .. } => {
                 out.push_str("<unsupported constant>");
             }
         }
@@ -1237,7 +1273,8 @@ impl<'m> Printer<'m> {
                 out.push_str("getelementptr");
                 self.gep_flags_to(out, *gf);
                 if let Some(r) = inrange {
-                    let _ = write!(out, " inrange({}, {})", int_decimal(&r.lower, r.bits), int_decimal(&r.upper, r.bits));
+                    let _ =
+                        write!(out, " inrange({}, {})", int_decimal(&r.lower, r.bits), int_decimal(&r.upper, r.bits));
                 }
                 out.push_str(" (");
                 self.type_to(out, *source);
@@ -1287,7 +1324,7 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Metadata ---------------------------------------------------------------------------------------------------
+    // Metadata --------------------------------------------------------------------------------------------------------
 
     /// `WriteAsOperandInternal` for metadata.
     fn md_operand_to(&self, out: &mut String, md: MdId, from_value: bool) {
@@ -1357,7 +1394,7 @@ impl<'m> Printer<'m> {
         }
     }
 
-    // Module -----------------------------------------------------------------------------------------------------
+    // Module ----------------------------------------------------------------------------------------------------------
 
     fn is_implicit_dso_local(c: &GlobalCommon) -> bool {
         c.linkage.is_local() || (c.visibility != Visibility::Default && c.linkage != Linkage::ExternalWeak)
@@ -1512,7 +1549,10 @@ impl<'m> Printer<'m> {
             out.push('\n');
         }
         for a in &m.aliases {
-            self.value_to(&mut out, Value::Global(GlobalId::Alias(m.aliases.iter().position(|x| std::ptr::eq(x, a)).unwrap() as u32)));
+            self.value_to(
+                &mut out,
+                Value::Global(GlobalId::Alias(m.aliases.iter().position(|x| std::ptr::eq(x, a)).unwrap() as u32)),
+            );
             out.push_str(" = ");
             Self::global_prefix_to(&mut out, &a.common);
             Self::dll_to(&mut out, a.common.dll_storage);
@@ -1790,7 +1830,9 @@ impl<'m> Printer<'m> {
                     // BranchInst sets the false destination before the true one.
                     Op::CondBr { t, f: fb, .. } => vec![*fb, *t],
                     Op::Br { dest } => vec![*dest],
-                    Op::Switch { default, cases, .. } => std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect(),
+                    Op::Switch { default, cases, .. } => {
+                        std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect()
+                    }
                     Op::IndirectBr { dests, .. } => dests.clone(),
                     _ => vec![],
                 };
@@ -1891,7 +1933,9 @@ impl<'m> Printer<'m> {
             return true;
         }
         match t.get(ty) {
-            Type::LiteralStruct { elems, .. } => !elems.is_empty() && elems.iter().all(|e| *e == elems[0]) && t.is_fp_or_fp_vector(elems[0]),
+            Type::LiteralStruct { elems, .. } => {
+                !elems.is_empty() && elems.iter().all(|e| *e == elems[0]) && t.is_fp_or_fp_vector(elems[0])
+            }
             Type::Array { .. } => {
                 let mut e = ty;
                 while let Type::Array { elem, .. } = t.get(e) {
@@ -2127,7 +2171,8 @@ impl<'m> Printer<'m> {
                     self.attr_set_to_plain(&mut out, attrs.ret);
                 }
                 let callee_as = m.types.pointer_addrspace(self.value_type(*callee)).unwrap_or(0);
-                let program_as = crate::ir::layout::DataLayout::parse(&m.datalayout).map(|d| d.program_addrspace).unwrap_or(0);
+                let program_as =
+                    crate::ir::layout::DataLayout::parse(&m.datalayout).map(|d| d.program_addrspace).unwrap_or(0);
                 if callee_as != 0 || program_as != 0 {
                     let _ = write!(out, " addrspace({})", callee_as);
                 }
@@ -2194,7 +2239,8 @@ impl<'m> Printer<'m> {
                 }
                 self.type_to(&mut out, *allocated);
                 let count_ty = self.value_type(*count);
-                let is_one = matches!(count, Value::Const(c) if matches!(&m.constant(*c).kind, ConstKind::Int(w) if w.len() == 1 && w[0] == 1));
+                let is_one = matches!(count, Value::Const(c)
+                    if matches!(&m.constant(*c).kind, ConstKind::Int(w) if w.len() == 1 && w[0] == 1));
                 if !is_one || m.types.int_bits(count_ty) != Some(32) {
                     out.push_str(", ");
                     self.operand_to(&mut out, *count, true);
@@ -2229,8 +2275,15 @@ impl<'m> Printer<'m> {
                 }
                 let operands = op.operands();
                 let first_ty = self.value_type(operands[0]);
-                let print_all = matches!(op, Op::Select { .. } | Op::Store { .. } | Op::ShuffleVector { .. } | Op::Ret { .. } | Op::CmpXchg { .. } | Op::AtomicRmw { .. })
-                    || operands[1..].iter().any(|o| self.value_type(*o) != first_ty);
+                let print_all = matches!(
+                    op,
+                    Op::Select { .. }
+                        | Op::Store { .. }
+                        | Op::ShuffleVector { .. }
+                        | Op::Ret { .. }
+                        | Op::CmpXchg { .. }
+                        | Op::AtomicRmw { .. }
+                ) || operands[1..].iter().any(|o| self.value_type(*o) != first_ty);
                 if !print_all {
                     out.push(' ');
                     self.type_to(&mut out, first_ty);
@@ -2348,7 +2401,8 @@ impl<'m> TypeFinder<'m> {
             return;
         }
         // AttributeList iteration order: function, return, parameters.
-        let sets: Vec<AttrSetId> = std::iter::once(a.function).chain(std::iter::once(a.ret)).chain(a.params.iter().copied()).collect();
+        let sets: Vec<AttrSetId> =
+            std::iter::once(a.function).chain(std::iter::once(a.ret)).chain(a.params.iter().copied()).collect();
         for s in sets {
             for at in self.m.attrs(s).iter() {
                 if let Attribute::Type(_, Some(t)) = at {

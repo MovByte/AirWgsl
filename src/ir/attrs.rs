@@ -405,7 +405,9 @@ impl AttrList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.function == AttrSetId::EMPTY && self.ret == AttrSetId::EMPTY && self.params.iter().all(|p| *p == AttrSetId::EMPTY)
+        self.function == AttrSetId::EMPTY
+            && self.ret == AttrSetId::EMPTY
+            && self.params.iter().all(|p| *p == AttrSetId::EMPTY)
     }
 
     /// Drops trailing empty parameter sets, the canonical form.

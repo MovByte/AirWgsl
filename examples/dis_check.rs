@@ -65,14 +65,16 @@ fn main() {
         let jobs = jobs.clone();
         let next = next.clone();
         let results = results.clone();
-        handles.push(std::thread::spawn(move || loop {
-            let i = next.fetch_add(1, Ordering::Relaxed);
-            if i >= jobs.len() {
-                break;
+        handles.push(std::thread::spawn(move || {
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= jobs.len() {
+                    break;
+                }
+                let (bc, ll) = &jobs[i];
+                let r = std::panic::catch_unwind(|| check(bc, ll)).unwrap_or_else(|_| ("error".into(), "panic".into()));
+                results.lock().unwrap()[i] = r;
             }
-            let (bc, ll) = &jobs[i];
-            let r = std::panic::catch_unwind(|| check(bc, ll)).unwrap_or_else(|_| ("error".into(), "panic".into()));
-            results.lock().unwrap()[i] = r;
         }));
     }
     for h in handles {

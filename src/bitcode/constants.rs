@@ -112,15 +112,32 @@ pub(crate) enum RawKind {
     /// Already canonical.
     Ready(ConstKind),
     Aggregate(Vec<u64>),
-    Cast { op: CastOp, operand: u64 },
-    Binary { op: BinOp, flags: u8, lhs: u64, rhs: u64 },
+    Cast {
+        op: CastOp,
+        operand: u64,
+    },
+    Binary {
+        op: BinOp,
+        flags: u8,
+        lhs: u64,
+        rhs: u64,
+    },
     FNeg(u64),
-    Gep { source: TypeId, flags: u8, inrange: Option<ConstantRange>, operands: Vec<u64> },
+    Gep {
+        source: TypeId,
+        flags: u8,
+        inrange: Option<ConstantRange>,
+        operands: Vec<u64>,
+    },
     Select(u64, u64, u64),
     ExtractElement(u64, u64),
     InsertElement(u64, u64, u64),
     ShuffleVector(u64, u64, u64),
-    Cmp { pred: u64, lhs: u64, rhs: u64 },
+    Cmp {
+        pred: u64,
+        lhs: u64,
+        rhs: u64,
+    },
     InlineAsm(u32),
 }
 
@@ -182,7 +199,9 @@ pub(crate) fn cast_is_valid(types: &TypeTable, op: CastOp, src: TypeId, dst: Typ
     let dbits = types.scalar_bits(dst);
     match op {
         Trunc => types.is_int_or_int_vector(src) && types.is_int_or_int_vector(dst) && same_count && sbits > dbits,
-        ZExt | SExt => types.is_int_or_int_vector(src) && types.is_int_or_int_vector(dst) && same_count && sbits < dbits,
+        ZExt | SExt => {
+            types.is_int_or_int_vector(src) && types.is_int_or_int_vector(dst) && same_count && sbits < dbits
+        }
         FPTrunc => types.is_fp_or_fp_vector(src) && types.is_fp_or_fp_vector(dst) && same_count && sbits > dbits,
         FPExt => types.is_fp_or_fp_vector(src) && types.is_fp_or_fp_vector(dst) && same_count && sbits < dbits,
         UIToFP | SIToFP => types.is_int_or_int_vector(src) && types.is_fp_or_fp_vector(dst) && same_count,
@@ -199,7 +218,11 @@ pub(crate) fn cast_is_valid(types: &TypeTable, op: CastOp, src: TypeId, dst: Typ
                 // Pointers: same address space, and vector-ness preserved with equal counts.
                 return types.pointer_addrspace(src) == types.pointer_addrspace(dst) && same_count;
             }
-            if !types.is_first_class(src) || !types.is_first_class(dst) || types.is_aggregate(src) || types.is_aggregate(dst) {
+            if !types.is_first_class(src)
+                || !types.is_first_class(dst)
+                || types.is_aggregate(src)
+                || types.is_aggregate(dst)
+            {
                 return false;
             }
             // Primitive sizes must match.
@@ -228,7 +251,14 @@ fn supported_cast(op: CastOp) -> bool {
 
 /// `CastInst::isEliminableCastPair` with a 64-bit fake integer pointer type in the middle and none at the ends, as
 /// `foldConstantCastPair` calls it. Returns the opcode of the single replacing cast.
-fn eliminable_cast_pair(types: &TypeTable, first: CastOp, second: CastOp, src: TypeId, mid: TypeId, dst: TypeId) -> Option<CastOp> {
+fn eliminable_cast_pair(
+    types: &TypeTable,
+    first: CastOp,
+    second: CastOp,
+    src: TypeId,
+    mid: TypeId,
+    dst: TypeId,
+) -> Option<CastOp> {
     use CastOp::*;
     const TABLE: [[u8; 13]; 13] = [
         [1, 0, 0, 99, 99, 0, 0, 99, 99, 99, 0, 3, 0],
@@ -247,7 +277,8 @@ fn eliminable_cast_pair(types: &TypeTable, first: CastOp, second: CastOp, src: T
     ];
     let first_bitcast = first == BitCast;
     let second_bitcast = second == BitCast;
-    if ((first_bitcast && types.is_vector(src) != types.is_vector(mid)) || (second_bitcast && types.is_vector(mid) != types.is_vector(dst)))
+    if ((first_bitcast && types.is_vector(src) != types.is_vector(mid))
+        || (second_bitcast && types.is_vector(mid) != types.is_vector(dst)))
         && !(first_bitcast && second_bitcast)
     {
         return None;
@@ -407,7 +438,8 @@ impl<'a> Reader<'a> {
                             RawKind::Ready(data_or_splat_vector(*len, bits as u64, true))
                         }
                         Type::Vector { .. } => {
-                            return self.unsupported("vector constants of 80- or 128-bit floating-point or scalable type");
+                            return self
+                                .unsupported("vector constants of 80- or 128-bit floating-point or scalable type");
                         }
                         _ => RawKind::Ready(ConstKind::Float(bits)),
                     }
@@ -416,7 +448,10 @@ impl<'a> Reader<'a> {
                     if ops.is_empty() {
                         return self.malformed("invalid aggregate record");
                     }
-                    if !matches!(types.get(cur_ty), Type::Struct { .. } | Type::LiteralStruct { .. } | Type::Array { .. } | Type::Vector { .. }) {
+                    if !matches!(
+                        types.get(cur_ty),
+                        Type::Struct { .. } | Type::LiteralStruct { .. } | Type::Array { .. } | Type::Vector { .. }
+                    ) {
                         return self.malformed("aggregate constant of a non-aggregate type");
                     }
                     RawKind::Aggregate(ops.clone())
@@ -495,15 +530,20 @@ impl<'a> Reader<'a> {
                     self.ty(ops[1])?;
                     RawKind::Cast { op, operand: ops[2] }
                 }
-                CST_CODE_CE_INBOUNDS_GEP | CST_CODE_CE_GEP_OLD | CST_CODE_CE_GEP_WITH_INRANGE_INDEX_OLD | CST_CODE_CE_GEP
+                CST_CODE_CE_INBOUNDS_GEP
+                | CST_CODE_CE_GEP_OLD
+                | CST_CODE_CE_GEP_WITH_INRANGE_INDEX_OLD
+                | CST_CODE_CE_GEP
                 | CST_CODE_CE_GEP_WITH_INRANGE => {
                     if ops.len() < 2 {
                         return self.malformed("constant GEP record must have at least two elements");
                     }
                     let mut i = 0;
                     let mut pointee: Option<TypeId> = None;
-                    if matches!(r.code, CST_CODE_CE_GEP_WITH_INRANGE_INDEX_OLD | CST_CODE_CE_GEP_WITH_INRANGE | CST_CODE_CE_GEP)
-                        || ops.len() % 2 == 1
+                    if matches!(
+                        r.code,
+                        CST_CODE_CE_GEP_WITH_INRANGE_INDEX_OLD | CST_CODE_CE_GEP_WITH_INRANGE | CST_CODE_CE_GEP
+                    ) || ops.len() % 2 == 1
                     {
                         pointee = Some(self.ty(ops[0])?);
                         i += 1;
@@ -551,7 +591,10 @@ impl<'a> Reader<'a> {
                     }
                     let source = match pointee {
                         Some(p) => p,
-                        None => match self.contained(base_bc32, 0).and_then(|c| self.bc_types.get(c as usize).copied().flatten()) {
+                        None => match self
+                            .contained(base_bc32, 0)
+                            .and_then(|c| self.bc_types.get(c as usize).copied().flatten())
+                        {
                             Some(p) => p,
                             None => return self.malformed("missing element type for an old-style constant GEP"),
                         },
@@ -648,7 +691,9 @@ impl<'a> Reader<'a> {
                     RawKind::InlineAsm(idx as u32)
                 }
                 CST_CODE_INLINEASM_OLD | CST_CODE_INLINEASM_OLD2 | CST_CODE_INLINEASM_OLD3 => {
-                    return self.unsupported("inline asm records of LLVM before 13 (the asm string upgrade is not implemented)");
+                    return self.unsupported(
+                        "inline asm records of LLVM before 13 (the asm string upgrade is not implemented)",
+                    );
                 }
                 CST_CODE_BLOCKADDRESS => return self.unsupported("blockaddress constants"),
                 CST_CODE_DSO_LOCAL_EQUIVALENT => return self.unsupported("dso_local_equivalent constants"),
@@ -821,7 +866,8 @@ impl<'a> Reader<'a> {
             RawKind::Binary { op, flags, lhs, rhs } => {
                 if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Xor) {
                     self.unsupported(format!(
-                        "constant expression {} (flags {:#x}) of constants {} and {}: folding binary constant expressions as LLVM does is not implemented",
+                        "constant expression {} (flags {:#x}) of constants {} and {}: folding binary constant \
+                         expressions as LLVM does is not implemented",
                         op.name(),
                         flags,
                         lhs,
@@ -832,10 +878,14 @@ impl<'a> Reader<'a> {
                 }
             }
             RawKind::FNeg(v) => self.unsupported_expr(&format!("fneg of constant {}", v), ty, use_),
-            RawKind::Select(c, a, b) => self.unsupported_expr(&format!("select of constants {}, {}, {}", c, a, b), ty, use_),
-            RawKind::Cmp { pred, lhs, rhs } => {
-                self.unsupported_expr(&format!("compare (predicate {}) of constants {} and {}", pred, lhs, rhs), ty, use_)
+            RawKind::Select(c, a, b) => {
+                self.unsupported_expr(&format!("select of constants {}, {}, {}", c, a, b), ty, use_)
             }
+            RawKind::Cmp { pred, lhs, rhs } => self.unsupported_expr(
+                &format!("compare (predicate {}) of constants {} and {}", pred, lhs, rhs),
+                ty,
+                use_,
+            ),
             RawKind::ExtractElement(a, b) => self.unsupported_vector_expr("extractelement", &[a, b]),
             RawKind::InsertElement(a, b, c) => self.unsupported_vector_expr("insertelement", &[a, b, c]),
             RawKind::ShuffleVector(a, b, c) => self.unsupported_vector_expr("shufflevector", &[a, b, c]),
@@ -844,7 +894,8 @@ impl<'a> Reader<'a> {
 
     fn unsupported_vector_expr(&mut self, name: &str, operands: &[u64]) -> Result<Value> {
         self.unsupported(format!(
-            "constant expression {} of constants {:?}: folding vector constant expressions as LLVM does is not implemented",
+            "constant expression {} of constants {:?}: folding vector constant expressions as LLVM does is not \
+             implemented",
             name, operands
         ))
     }
@@ -972,11 +1023,7 @@ fn data_or_splat_vector(len: u32, bits: u64, _float: bool) -> ConstKind {
 }
 
 fn vector_splat_kind(m: &Module, len: u32, e: ConstId) -> ConstKind {
-    if is_null(m, Value::Const(e)) {
-        ConstKind::Zero
-    } else {
-        ConstKind::Vector(vec![Value::Const(e); len as usize])
-    }
+    if is_null(m, Value::Const(e)) { ConstKind::Zero } else { ConstKind::Vector(vec![Value::Const(e); len as usize]) }
 }
 
 /// `Constant::isNullValue`.
@@ -1090,11 +1137,7 @@ fn sequence_kind(m: &Module, ty: TypeId, elems: Vec<Value>, is_vector: bool) -> 
             return data_kind(bits, is_vector);
         }
     }
-    if is_vector {
-        ConstKind::Vector(elems)
-    } else {
-        ConstKind::Array(elems)
-    }
+    if is_vector { ConstKind::Vector(elems) } else { ConstKind::Array(elems) }
 }
 
 /// The value of a constant integer index (`ConstantInt::getZExtValue`), including a splat vector of one.
@@ -1116,7 +1159,12 @@ pub(crate) fn gep_result_type(m: &mut Module, base: TypeId, indices: &[Value]) -
     gep_result_type_with(m, base, indices.iter().map(|_| None).collect(), indices)
 }
 
-pub(crate) fn gep_result_type_with(m: &mut Module, base: TypeId, local: Vec<Option<TypeId>>, indices: &[Value]) -> TypeId {
+pub(crate) fn gep_result_type_with(
+    m: &mut Module,
+    base: TypeId,
+    local: Vec<Option<TypeId>>,
+    indices: &[Value],
+) -> TypeId {
     let addrspace = m.types.pointer_addrspace(base).unwrap_or(0);
     let ptr = m.types.ptr(addrspace);
     if let Some(n) = m.types.vector_len(base) {
@@ -1338,7 +1386,10 @@ fn fold_bitcast(m: &mut Module, v: Value, dst: TypeId) -> Option<Value> {
                 let vec = const_vector(m, vt, vec![v]);
                 return Some(get_cast(m, CastOp::BitCast, vec, dst));
             }
-            if !m.types.is_fp_or_fp_vector(dst) || matches!(m.types.get(dst), Type::PpcFp128) || m.types.scalar_bits(dst) != m.types.scalar_bits(src) {
+            if !m.types.is_fp_or_fp_vector(dst)
+                || matches!(m.types.get(dst), Type::PpcFp128)
+                || m.types.scalar_bits(dst) != m.types.scalar_bits(src)
+            {
                 return None;
             }
             if m.types.is_vector(dst) {
@@ -1356,7 +1407,10 @@ fn fold_bitcast(m: &mut Module, v: Value, dst: TypeId) -> Option<Value> {
             if matches!(m.types.get(src), Type::PpcFp128) {
                 return None;
             }
-            if !m.types.is_int_or_int_vector(dst) || m.types.scalar_bits(dst) != m.types.scalar_bits(src) || m.types.is_vector(dst) {
+            if !m.types.is_int_or_int_vector(dst)
+                || m.types.scalar_bits(dst) != m.types.scalar_bits(src)
+                || m.types.is_vector(dst)
+            {
                 return None;
             }
             let bits = m.types.int_bits(dst)?;

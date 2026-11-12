@@ -155,7 +155,8 @@ fn main() {
         eprintln!("usage: fuzz_check FILES.txt CASES_PER_FILE [THREADS]");
         std::process::exit(2);
     }
-    let files: Vec<String> = std::fs::read_to_string(&args[1]).expect("files").lines().filter(|l| !l.is_empty()).map(String::from).collect();
+    let files: Vec<String> =
+        std::fs::read_to_string(&args[1]).expect("files").lines().filter(|l| !l.is_empty()).map(String::from).collect();
     let cases: usize = args[2].parse().expect("cases");
     let threads: usize = args.get(3).and_then(|t| t.parse().ok()).unwrap_or(4);
     let files = Arc::new(files);
@@ -165,46 +166,48 @@ fn main() {
     let mut handles = Vec::new();
     for _ in 0..threads {
         let (files, next, failures, counts) = (files.clone(), next.clone(), failures.clone(), counts.clone());
-        handles.push(std::thread::spawn(move || loop {
-            let i = next.fetch_add(1, Ordering::Relaxed);
-            if i >= files.len() {
-                break;
-            }
-            let data = match std::fs::read(&files[i]) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let mut inputs: Vec<(String, Vec<u8>)> = Vec::new();
-            let mut lengths: Vec<usize> = (0..data.len().min(512)).collect();
-            let step = (data.len() / 64).max(1);
-            lengths.extend((512..data.len()).step_by(step));
-            for n in lengths {
-                inputs.push((format!("truncate {}", n), data[..n].to_vec()));
-            }
-            let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ (i as u64 + 1).wrapping_mul(0x1000_0000_01b3));
-            for c in 0..cases {
-                inputs.push((format!("mutation {}", c), mutate(&data, &mut rng)));
-            }
-            for (what, input) in inputs {
-                eprintln!("start\t{}\t{}", files[i], what);
-                let start = Instant::now();
-                let r = std::thread::Builder::new()
-                    .stack_size(2 << 20)
-                    .spawn(move || std::panic::catch_unwind(|| parse_all(&input)))
-                    .unwrap()
-                    .join();
-                let elapsed = start.elapsed();
-                let mut c = counts.lock().unwrap();
-                match r {
-                    Ok(Ok(true)) => c.0 += 1,
-                    Ok(Ok(false)) => c.1 += 1,
-                    _ => {
-                        c.2 += 1;
-                        failures.lock().unwrap().push(format!("{}\t{}\tpanic", files[i], what));
-                    }
+        handles.push(std::thread::spawn(move || {
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= files.len() {
+                    break;
                 }
-                if elapsed > Duration::from_secs(10) {
-                    failures.lock().unwrap().push(format!("{}\t{}\tslow {:?}", files[i], what, elapsed));
+                let data = match std::fs::read(&files[i]) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let mut inputs: Vec<(String, Vec<u8>)> = Vec::new();
+                let mut lengths: Vec<usize> = (0..data.len().min(512)).collect();
+                let step = (data.len() / 64).max(1);
+                lengths.extend((512..data.len()).step_by(step));
+                for n in lengths {
+                    inputs.push((format!("truncate {}", n), data[..n].to_vec()));
+                }
+                let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ (i as u64 + 1).wrapping_mul(0x1000_0000_01b3));
+                for c in 0..cases {
+                    inputs.push((format!("mutation {}", c), mutate(&data, &mut rng)));
+                }
+                for (what, input) in inputs {
+                    eprintln!("start\t{}\t{}", files[i], what);
+                    let start = Instant::now();
+                    let r = std::thread::Builder::new()
+                        .stack_size(2 << 20)
+                        .spawn(move || std::panic::catch_unwind(|| parse_all(&input)))
+                        .unwrap()
+                        .join();
+                    let elapsed = start.elapsed();
+                    let mut c = counts.lock().unwrap();
+                    match r {
+                        Ok(Ok(true)) => c.0 += 1,
+                        Ok(Ok(false)) => c.1 += 1,
+                        _ => {
+                            c.2 += 1;
+                            failures.lock().unwrap().push(format!("{}\t{}\tpanic", files[i], what));
+                        }
+                    }
+                    if elapsed > Duration::from_secs(10) {
+                        failures.lock().unwrap().push(format!("{}\t{}\tslow {:?}", files[i], what, elapsed));
+                    }
                 }
             }
         }));
@@ -217,7 +220,15 @@ fn main() {
     for f in failures.iter() {
         println!("{}", f);
     }
-    println!("files={} cases={} parsed={} rejected={} panics={} failures={}", files.len(), ok + err + panics, ok, err, panics, failures.len());
+    println!(
+        "files={} cases={} parsed={} rejected={} panics={} failures={}",
+        files.len(),
+        ok + err + panics,
+        ok,
+        err,
+        panics,
+        failures.len()
+    );
     if !failures.is_empty() {
         std::process::exit(1);
     }

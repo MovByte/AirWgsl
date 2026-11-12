@@ -273,7 +273,13 @@ pub struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     /// A cursor at the start of `data`, at the top level of the stream (abbreviation width 2).
     pub fn new(data: &'a [u8]) -> Cursor<'a> {
-        Cursor { reader: BitReader::new(data), code_width: 2, abbrevs: Vec::new(), scope: Vec::new(), blockinfo: BlockInfo::default() }
+        Cursor {
+            reader: BitReader::new(data),
+            code_width: 2,
+            abbrevs: Vec::new(),
+            scope: Vec::new(),
+            blockinfo: BlockInfo::default(),
+        }
     }
 
     pub fn reader(&mut self) -> &mut BitReader<'a> {
@@ -383,7 +389,8 @@ impl<'a> Cursor<'a> {
         }
         if let Some(parent) = self.scope.last() {
             if end > parent.end {
-                return self.error(format!("block {} runs past the end of its parent block {}", block_id, parent.block_id));
+                return self
+                    .error(format!("block {} runs past the end of its parent block {}", block_id, parent.block_id));
             }
         }
         let mut abbrevs: Vec<Rc<Abbrev>> = self.blockinfo.abbrevs(block_id).to_vec();

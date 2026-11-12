@@ -56,7 +56,14 @@ impl Default for DataLayout {
             int_specs: vec![p(1, 1, 1), p(8, 1, 1), p(16, 2, 2), p(32, 4, 4), p(64, 4, 8)],
             float_specs: vec![p(16, 2, 2), p(32, 4, 4), p(64, 8, 8), p(128, 16, 16)],
             vector_specs: vec![p(64, 8, 8), p(128, 16, 16)],
-            pointer_specs: vec![PointerSpec { addrspace: 0, bits: 64, abi: 8, pref: 8, index_bits: 64, non_integral: false }],
+            pointer_specs: vec![PointerSpec {
+                addrspace: 0,
+                bits: 64,
+                abi: 8,
+                pref: 8,
+                index_bits: 64,
+                non_integral: false,
+            }],
             struct_abi: 1,
             struct_pref: 8,
         }
@@ -125,7 +132,9 @@ impl DataLayout {
 
     fn parse_spec(&mut self, spec: &str, non_integral: &mut Vec<u32>) -> Result<(), String> {
         if let Some(rest) = spec.strip_prefix("ni") {
-            let rest = rest.strip_prefix(':').ok_or("malformed specification, must be of the form \"ni:<address space>[:<address space>]...\"")?;
+            let rest = rest
+                .strip_prefix(':')
+                .ok_or("malformed specification, must be of the form \"ni:<address space>[:<address space>]...\"")?;
             for a in rest.split(':') {
                 let a = parse_addrspace(a)?;
                 if a == 0 {
@@ -183,7 +192,9 @@ impl DataLayout {
             "p" => {
                 let parts: Vec<&str> = rest.split(':').collect();
                 if parts.len() < 3 || parts.len() > 5 {
-                    return Err("malformed specification, must be of the form \"p[<n>]:<size>:<abi>[:<pref>[:<idx>]]\"".into());
+                    return Err(
+                        "malformed specification, must be of the form \"p[<n>]:<size>:<abi>[:<pref>[:<idx>]]\"".into(),
+                    );
                 }
                 let addrspace = if parts[0].is_empty() { 0 } else { parse_addrspace(parts[0])? };
                 let bits = parse_size(parts[1], "pointer size")?;
@@ -229,7 +240,8 @@ impl DataLayout {
             "A" => self.alloca_addrspace = parse_addrspace(rest)?,
             "G" => self.globals_addrspace = parse_addrspace(rest)?,
             "m" => {
-                let mode = rest.strip_prefix(':').ok_or("malformed specification, must be of the form \"m:<mangling>\"")?;
+                let mode =
+                    rest.strip_prefix(':').ok_or("malformed specification, must be of the form \"m:<mangling>\"")?;
                 if !matches!(mode, "e" | "l" | "o" | "m" | "w" | "x" | "a") {
                     return Err("unknown mangling mode".into());
                 }
@@ -325,7 +337,11 @@ impl DataLayout {
                 let bits = self.size_bits(types, t)? as u32;
                 match self.float_specs.binary_search_by_key(&bits, |s| s.bits) {
                     Ok(i) => {
-                        if abi { self.float_specs[i].abi } else { self.float_specs[i].pref }
+                        if abi {
+                            self.float_specs[i].abi
+                        } else {
+                            self.float_specs[i].pref
+                        }
                     }
                     Err(_) => ((bits / 8) as u64).next_power_of_two(),
                 }
@@ -334,7 +350,11 @@ impl DataLayout {
                 let bits = self.size_bits(types, t)?;
                 match self.vector_specs.binary_search_by_key(&(bits as u32), |s| s.bits as u32) {
                     Ok(i) if bits <= u32::MAX as u64 => {
-                        if abi { self.vector_specs[i].abi } else { self.vector_specs[i].pref }
+                        if abi {
+                            self.vector_specs[i].abi
+                        } else {
+                            self.vector_specs[i].pref
+                        }
                     }
                     _ => self.store_size(types, t)?.next_power_of_two(),
                 }
@@ -381,7 +401,11 @@ pub struct StructLayout {
 mod tests {
     use super::*;
 
-    const AIR: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
+    const AIR: &str = concat!(
+        "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-",
+        "v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-",
+        "v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32",
+    );
 
     #[test]
     fn air_layout_sizes() {

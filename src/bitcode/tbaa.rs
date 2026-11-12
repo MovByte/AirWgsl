@@ -210,7 +210,12 @@ impl Verifier {
         }
         if !matches!(
             m.functions[f].insts[inst].op,
-            Op::Load { .. } | Op::Store { .. } | Op::Call { .. } | Op::VaArg { .. } | Op::AtomicRmw { .. } | Op::CmpXchg { .. }
+            Op::Load { .. }
+                | Op::Store { .. }
+                | Op::Call { .. }
+                | Op::VaArg { .. }
+                | Op::AtomicRmw { .. }
+                | Op::CmpXchg { .. }
         ) {
             return false;
         }

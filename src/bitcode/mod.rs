@@ -360,7 +360,8 @@ impl<'a> Reader<'a> {
                         IDENTIFICATION_CODE_STRING => self.m.producer = Some(self.record_string(&r.ops)?),
                         IDENTIFICATION_CODE_EPOCH => {
                             if r.ops.first() != Some(&BITCODE_CURRENT_EPOCH) {
-                                return self.unsupported(format!("bitcode epoch {:?} (only epoch 0 exists)", r.ops.first()));
+                                return self
+                                    .unsupported(format!("bitcode epoch {:?} (only epoch 0 exists)", r.ops.first()));
                             }
                         }
                         c => return self.malformed(format!("unknown identification record {}", c)),
@@ -373,7 +374,11 @@ impl<'a> Reader<'a> {
     /// Characters of a string record (`convertToString`).
     pub fn record_bytes(&self, ops: &[u64]) -> Result<Vec<u8>> {
         ops.iter()
-            .map(|&c| if c <= 0xff { Ok(c as u8) } else { self.malformed(format!("character {} in a string record", c)) })
+            .map(
+                |&c| {
+                    if c <= 0xff { Ok(c as u8) } else { self.malformed(format!("character {} in a string record", c)) }
+                },
+            )
             .collect()
     }
 
@@ -425,7 +430,8 @@ impl<'a> Reader<'a> {
     pub fn virtual_type(&mut self, ty: TypeId, contained: Vec<u32>) -> u32 {
         // Reuse an existing id with the same IR type and first contained id, as LLVM caches them.
         for (i, t) in self.bc_types.iter().enumerate() {
-            if *t == Some(ty) && self.bc_contained[i].first() == contained.first() && self.bc_contained[i] == contained {
+            if *t == Some(ty) && self.bc_contained[i].first() == contained.first() && self.bc_contained[i] == contained
+            {
                 return i as u32;
             }
         }
@@ -494,7 +500,8 @@ impl<'a> Reader<'a> {
                                 None => return self.malformed("more function blocks than functions with bodies"),
                             }
                         } else {
-                            let found: Vec<u32> = self.function_block_at.iter().filter(|(_, at)| **at == pos).map(|(f, _)| *f).collect();
+                            let found: Vec<u32> =
+                                self.function_block_at.iter().filter(|(_, at)| **at == pos).map(|(f, _)| *f).collect();
                             match found.as_slice() {
                                 [f] => *f,
                                 [] => return self.malformed("function block that no FNENTRY offset names"),
@@ -513,7 +520,9 @@ impl<'a> Reader<'a> {
                     USELIST_BLOCK_ID => self.read_use_lists(None)?,
                     OPERAND_BUNDLE_TAGS_BLOCK_ID => self.read_bundle_tags()?,
                     SYNC_SCOPE_NAMES_BLOCK_ID => self.read_sync_scopes()?,
-                    other => return self.unsupported(format!("block {} ({}) in the module block", other, block_name(other))),
+                    other => {
+                        return self.unsupported(format!("block {} ({}) in the module block", other, block_name(other)));
+                    }
                 },
                 Entry::Record(a) => {
                     let r = self.cur.read_record(a)?;
@@ -605,7 +614,9 @@ impl<'a> Reader<'a> {
                 self.resolve_datalayout()?;
                 self.function_record(&r.ops)?;
             }
-            MODULE_CODE_ALIAS | MODULE_CODE_ALIAS_OLD | MODULE_CODE_IFUNC => self.indirect_symbol_record(r.code, &r.ops)?,
+            MODULE_CODE_ALIAS | MODULE_CODE_ALIAS_OLD | MODULE_CODE_IFUNC => {
+                self.indirect_symbol_record(r.code, &r.ops)?
+            }
             MODULE_CODE_VSTOFFSET => {
                 let v = match r.ops.first() {
                     Some(&v) if v >= 1 => v,
@@ -893,11 +904,8 @@ impl<'a> Reader<'a> {
         if cc & !1023 != 0 {
             return self.malformed(format!("invalid calling convention {}", cc));
         }
-        let addrspace = if r.len() > 16 {
-            r[16] as u32
-        } else {
-            self.layout.as_ref().map(|l| l.program_addrspace).unwrap_or(0)
-        };
+        let addrspace =
+            if r.len() > 16 { r[16] as u32 } else { self.layout.as_ref().map(|l| l.program_addrspace).unwrap_or(0) };
         let is_proto = r[2] != 0;
         let raw_linkage = r[3];
         let linkage = self.linkage(raw_linkage)?;
@@ -1097,7 +1105,10 @@ impl<'a> Reader<'a> {
             let v = self.initializer_value(id)?;
             let vt = self.m.module_value_type(v).unwrap();
             if vt != self.m.globals[g as usize].value_type {
-                return self.malformed(format!("initializer of global {} has the wrong type", self.m.globals[g as usize].common.name));
+                return self.malformed(format!(
+                    "initializer of global {} has the wrong type",
+                    self.m.globals[g as usize].common.name
+                ));
             }
             self.m.globals[g as usize].initializer = Some(v);
         }
@@ -1307,4 +1318,3 @@ impl<'a> Reader<'a> {
         upgrade::finish(self)
     }
 }
-

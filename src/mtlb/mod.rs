@@ -276,13 +276,25 @@ pub fn parse_metallib(data: &[u8]) -> Result<Metallib<'_>> {
         p += entry_size;
     }
     if p != list_end {
-        return err(p, format!("function entries span {:#x} bytes, the header says {:#x}", p - fl.offset as usize - 4, fl.size));
+        return err(
+            p,
+            format!("function entries span {:#x} bytes, the header says {:#x}", p - fl.offset as usize - 4, fl.size),
+        );
     }
     let (extension, q) = read_tags(data, p, header.public_metadata.offset as usize, "header extension")?;
     if q != header.public_metadata.offset as usize {
         return err(q, "bytes between the header extension and the public metadata");
     }
-    let mut lib = Metallib { data, header, functions, extension: Vec::new(), uuid: None, reflection_list: None, script_list: None, dynamic_header: None };
+    let mut lib = Metallib {
+        data,
+        header,
+        functions,
+        extension: Vec::new(),
+        uuid: None,
+        reflection_list: None,
+        script_list: None,
+        dynamic_header: None,
+    };
     for t in &extension {
         let range = |t: &Tag| -> Result<Range> {
             if t.data.len() != 16 {
@@ -329,7 +341,13 @@ pub fn parse_metallib(data: &[u8]) -> Result<Metallib<'_>> {
     Ok(lib)
 }
 
-fn function_entry<'a>(data: &'a [u8], at: usize, tags: Vec<Tag<'a>>, header: &Header, modules: Range) -> Result<Function<'a>> {
+fn function_entry<'a>(
+    data: &'a [u8],
+    at: usize,
+    tags: Vec<Tag<'a>>,
+    header: &Header,
+    modules: Range,
+) -> Result<Function<'a>> {
     let mut f = Function {
         name: String::new(),
         alias_of: None,
@@ -361,7 +379,15 @@ fn function_entry<'a>(data: &'a [u8], at: usize, tags: Vec<Tag<'a>>, header: &He
         }
         let len = |n: usize| -> Result<()> {
             if t.data.len() != n {
-                return err(at, format!("function tag {} of {} bytes (expected {})", String::from_utf8_lossy(&t.name), t.data.len(), n));
+                return err(
+                    at,
+                    format!(
+                        "function tag {} of {} bytes (expected {})",
+                        String::from_utf8_lossy(&t.name),
+                        t.data.len(),
+                        n
+                    ),
+                );
             }
             Ok(())
         };
@@ -455,7 +481,9 @@ fn function_entry<'a>(data: &'a [u8], at: usize, tags: Vec<Tag<'a>>, header: &He
             }
             let start = (modules.offset + f.module_offset) as usize;
             let bytes = &data[start..start + sz as usize];
-            if bytes.len() < 4 || (bytes[..4] != crate::bitcode::WRAPPER_MAGIC && bytes[..4] != crate::bitcode::BITCODE_MAGIC) {
+            if bytes.len() < 4
+                || (bytes[..4] != crate::bitcode::WRAPPER_MAGIC && bytes[..4] != crate::bitcode::BITCODE_MAGIC)
+            {
                 return err(start, format!("function {}: no bitcode at its module offset", f.name));
             }
             if sha256(bytes) != f.hash {
@@ -471,7 +499,12 @@ fn function_entry<'a>(data: &'a [u8], at: usize, tags: Vec<Tag<'a>>, header: &He
 /// Modules must not overlap, and no bitcode may hide in the module list outside them.
 fn check_modules(lib: &Metallib) -> Result<()> {
     let m = lib.header.module_list;
-    let mut spans: Vec<(u64, u64)> = lib.functions.iter().filter(|f| f.module.is_some()).map(|f| (f.module_offset, f.module.unwrap().len() as u64)).collect();
+    let mut spans: Vec<(u64, u64)> = lib
+        .functions
+        .iter()
+        .filter(|f| f.module.is_some())
+        .map(|f| (f.module_offset, f.module.unwrap().len() as u64))
+        .collect();
     spans.sort();
     spans.dedup();
     let mut cursor = 0u64;
@@ -582,7 +615,11 @@ impl<'a> Metallib<'a> {
             if total < 4 || total > end - p {
                 return err(p, format!("{} of size {:#x} does not fit its section", what, word));
             }
-            let (tags, q) = if counted { read_wide_tags(d, p + 4, p + total, what)? } else { read_tags(d, p + 4, p + total, what)? };
+            let (tags, q) = if counted {
+                read_wide_tags(d, p + 4, p + total, what)?
+            } else {
+                read_tags(d, p + 4, p + total, what)?
+            };
             if q != p + total {
                 return err(p, format!("{} size {:#x} does not match its tags", what, word));
             }
@@ -658,7 +695,7 @@ fn check_records(lib: &Metallib) -> Result<()> {
     Ok(())
 }
 
-// Containers --------------------------------------------------------------------------------------------------------
+// Containers ----------------------------------------------------------------------------------------------------------
 
 const FAT_MAGIC: [u8; 4] = [0xca, 0xfe, 0xba, 0xbe];
 const FAT_MAGIC_64: [u8; 4] = [0xca, 0xfe, 0xba, 0xbf];
@@ -670,12 +707,25 @@ const LC_SEGMENT_64: u32 = 0x19;
 /// Where a library or module sits in a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item<'a> {
-    Metallib { location: String, offset: usize, lib: Metallib<'a> },
+    Metallib {
+        location: String,
+        offset: usize,
+        lib: Metallib<'a>,
+    },
     /// One bitcode module that is not inside a metallib (a raw or wrapped bitcode file, an archive member, an entry of
     /// the GPU driver's runtime tables).
-    Module { location: String, name: String, offset: usize, bytes: &'a [u8] },
+    Module {
+        location: String,
+        name: String,
+        offset: usize,
+        bytes: &'a [u8],
+    },
     /// A pipeline-library entry, archive member or Mach-O section that holds no AIR, counted.
-    Other { location: String, offset: usize, size: usize },
+    Other {
+        location: String,
+        offset: usize,
+        size: usize,
+    },
 }
 
 /// Reads a file of any of the forms AIR ships in (the forms measured on the system root): a metallib, a big-endian
@@ -691,7 +741,14 @@ pub fn parse_container<'a>(data: &'a [u8], path: &str) -> Result<Vec<Item<'a>>> 
     Ok(out)
 }
 
-fn structure<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, path: &str, out: &mut Vec<Item<'a>>) -> Result<()> {
+fn structure<'a>(
+    data: &'a [u8],
+    base: usize,
+    limit: usize,
+    loc: &str,
+    path: &str,
+    out: &mut Vec<Item<'a>>,
+) -> Result<()> {
     let head = &data[base..limit.min(base + 8)];
     if head.starts_with(MTLB_MAGIC) {
         let lib = parse_metallib(&data[base..limit])?;
@@ -729,7 +786,8 @@ fn structure<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, path: &st
 
 fn fat<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, path: &str, out: &mut Vec<Item<'a>>) -> Result<()> {
     let be = |o: usize| -> Option<u32> { data.get(o..o + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap())) };
-    let count = be(base + 4).ok_or(Error { offset: Some(base), message: "truncated universal header".into() })? as usize;
+    let count =
+        be(base + 4).ok_or(Error { offset: Some(base), message: "truncated universal header".into() })? as usize;
     for i in 0..count {
         let e = base + 8 + 20 * i;
         let (cputype, sub, off, size) = match (be(e), be(e + 4), be(e + 8), be(e + 12)) {
@@ -750,7 +808,8 @@ fn fat<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, path: &str, out
 }
 
 fn macho<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, out: &mut Vec<Item<'a>>) -> Result<()> {
-    let ncmds = u32_at(data, base + 16).ok_or(Error { offset: Some(base), message: "truncated Mach-O header".into() })? as usize;
+    let ncmds = u32_at(data, base + 16)
+        .ok_or(Error { offset: Some(base), message: "truncated Mach-O header".into() })? as usize;
     let mut p = base + 32;
     for _ in 0..ncmds {
         let (cmd, size) = match (u32_at(data, p), u32_at(data, p + 4)) {
@@ -776,7 +835,10 @@ fn macho<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, out: &mut Vec
                     continue;
                 }
                 let start = base + soff;
-                let ssize = match usize::try_from(ssize).ok().filter(|n| start.checked_add(*n).map(|e| e <= limit).unwrap_or(false)) {
+                let ssize = match usize::try_from(ssize)
+                    .ok()
+                    .filter(|n| start.checked_add(*n).map(|e| e <= limit).unwrap_or(false))
+                {
                     Some(n) => n,
                     None => return err(sp, format!("section {},{} outside the file", seg, sect)),
                 };
@@ -809,7 +871,10 @@ fn metallib_section<'a>(data: &'a [u8], start: usize, end: usize, loc: &str, out
             p += 1;
         }
         if p < end && (p - start) % 16 != 0 {
-            return err(p, format!("{}: bytes after a metallib that are neither zero nor a metallib at a 16-byte boundary", loc));
+            return err(
+                p,
+                format!("{}: bytes after a metallib that are neither zero nor a metallib at a 16-byte boundary", loc),
+            );
         }
     }
     Ok(())
@@ -917,7 +982,8 @@ fn archive<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, out: &mut V
         let bytes = &data[body..body + body_size];
         if name.starts_with("__.SYMDEF") {
             out.push(Item::Other { location: format!("{}ar:{}", loc, name), offset: body, size: body_size });
-        } else if bytes.starts_with(&crate::bitcode::WRAPPER_MAGIC) || bytes.starts_with(&crate::bitcode::BITCODE_MAGIC) {
+        } else if bytes.starts_with(&crate::bitcode::WRAPPER_MAGIC) || bytes.starts_with(&crate::bitcode::BITCODE_MAGIC)
+        {
             out.push(Item::Module { location: format!("{}ar", loc), name, offset: body, bytes });
         } else {
             out.push(Item::Other { location: format!("{}ar:{}", loc, name), offset: body, size: body_size });
@@ -987,7 +1053,9 @@ pub fn embedded_metallibs<'a>(data: &'a [u8], exclude: &[(usize, usize)]) -> Vec
     while let Some(i) = data[pos..].windows(4).position(|w| w == MTLB_MAGIC) {
         let at = pos + i;
         pos = at + 1;
-        if exclude.iter().any(|(s, n)| at >= *s && at < s + n) || out.iter().any(|(s, l): &(usize, Metallib)| at >= *s && at < s + l.data.len()) {
+        if exclude.iter().any(|(s, n)| at >= *s && at < s + n)
+            || out.iter().any(|(s, l): &(usize, Metallib)| at >= *s && at < s + l.data.len())
+        {
             continue;
         }
         if let Ok(lib) = parse_metallib(&data[at..]) {

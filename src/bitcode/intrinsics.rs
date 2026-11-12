@@ -57,8 +57,12 @@ pub(crate) fn lookup(name: &str) -> Lookup {
             None => nb.len(),
         };
         last_low = low;
-        let lo = low + names[low..high].partition_point(|n| compare(n.as_bytes(), nb, cmp_start, cmp_end) == std::cmp::Ordering::Less);
-        let hi = low + names[low..high].partition_point(|n| compare(n.as_bytes(), nb, cmp_start, cmp_end) != std::cmp::Ordering::Greater);
+        let lo = low
+            + names[low..high]
+                .partition_point(|n| compare(n.as_bytes(), nb, cmp_start, cmp_end) == std::cmp::Ordering::Less);
+        let hi = low
+            + names[low..high]
+                .partition_point(|n| compare(n.as_bytes(), nb, cmp_start, cmp_end) != std::cmp::Ordering::Greater);
         low = lo;
         high = hi;
     }
@@ -265,7 +269,9 @@ impl<'a> Matcher<'a> {
         match d {
             D::Void => !matches!(t, Type::Void),
             D::VarArg => true,
-            D::Mmx => !matches!(t, Type::Vector { len: 1, elem, scalable: false } if self.types.int_bits(elem) == Some(64)),
+            D::Mmx => {
+                !matches!(t, Type::Vector { len: 1, elem, scalable: false } if self.types.int_bits(elem) == Some(64))
+            }
             D::Amx => !matches!(t, Type::X86Amx),
             D::Token => !matches!(t, Type::Token),
             D::Metadata => !matches!(t, Type::Metadata),
@@ -278,7 +284,9 @@ impl<'a> Matcher<'a> {
             D::Integer(w) => t != Type::Int(w),
             D::Svcount => !matches!(t, Type::TargetExt { ref name, .. } if name == "aarch64.svcount"),
             D::Vector(n, scalable) => match t {
-                Type::Vector { len, elem, scalable: s } if len == n && s == scalable => self.mismatch(elem, infos, pos, deferred_check),
+                Type::Vector { len, elem, scalable: s } if len == n && s == scalable => {
+                    self.mismatch(elem, infos, pos, deferred_check)
+                }
                 _ => true,
             },
             D::Pointer(a) => t != Type::Ptr(a),
@@ -400,7 +408,9 @@ impl<'a> Matcher<'a> {
                     self.arg_tys.push(ty);
                 }
                 match (self.types.get(self.arg_tys[r]).clone(), t) {
-                    (Type::Vector { len: rl, scalable: rs, .. }, Type::Vector { len, elem, scalable }) if rl == len && rs == scalable => {
+                    (Type::Vector { len: rl, scalable: rs, .. }, Type::Vector { len, elem, scalable })
+                        if rl == len && rs == scalable =>
+                    {
                         !self.types.is_ptr(elem)
                     }
                     _ => true,
@@ -549,7 +559,9 @@ fn mangle(types: &TypeTable, t: TypeId, unnamed: &mut bool) -> String {
             s.push('f');
             s
         }
-        Type::Vector { len, elem, scalable } => format!("{}v{}{}", if *scalable { "nx" } else { "" }, len, mangle(types, *elem, unnamed)),
+        Type::Vector { len, elem, scalable } => {
+            format!("{}v{}{}", if *scalable { "nx" } else { "" }, len, mangle(types, *elem, unnamed))
+        }
         Type::TargetExt { name, types: ts, ints } => {
             let mut s = format!("t{}", name);
             for x in ts {
@@ -651,7 +663,14 @@ fn special_upgrade(name: &str, nargs: usize) -> Option<&'static str> {
     }
     if let Some(rest) = name.strip_prefix("experimental.vector.") {
         let r = |p: &str| rest.starts_with(p);
-        if !r("extract.last.active.") && (r("extract.") || r("insert.") || r("splice.") || r("reverse.") || r("interleave2.") || r("deinterleave2.")) {
+        if !r("extract.last.active.")
+            && (r("extract.")
+                || r("insert.")
+                || r("splice.")
+                || r("reverse.")
+                || r("interleave2.")
+                || r("deinterleave2."))
+        {
             return Some("experimental.vector intrinsics");
         }
         if r("reduce.") {
@@ -696,7 +715,9 @@ pub(super) fn upgrade_intrinsics(r: &mut Reader) -> Result<()> {
         let name = r.m.functions[f].common.name.clone();
         let index = match lookup(&name) {
             Lookup::NotIntrinsic => continue,
-            Lookup::Target(t) => return r.unsupported(format!("target-specific LLVM intrinsic {} (target {})", name, t)),
+            Lookup::Target(t) => {
+                return r.unsupported(format!("target-specific LLVM intrinsic {} (target {})", name, t));
+            }
             Lookup::Generic(i) => i,
         };
         let fty = r.m.functions[f].ty;
@@ -731,9 +752,13 @@ pub(super) fn upgrade_intrinsics(r: &mut Reader) -> Result<()> {
         let existing = r.m.functions.iter().position(|g| g.common.name == wanted);
         let target = match existing {
             Some(e) if r.m.functions[e].ty == fty => e,
-            Some(_) => return r.unsupported(format!("{}: a different function already has its LLVM 21 name {}", name, wanted)),
+            Some(_) => {
+                return r.unsupported(format!("{}: a different function already has its LLVM 21 name {}", name, wanted));
+            }
             None => {
-                if r.m.globals.iter().any(|g| g.common.name == wanted) || r.m.aliases.iter().any(|g| g.common.name == wanted) {
+                if r.m.globals.iter().any(|g| g.common.name == wanted)
+                    || r.m.aliases.iter().any(|g| g.common.name == wanted)
+                {
                     return r.unsupported(format!("{}: a global already has its LLVM 21 name {}", name, wanted));
                 }
                 let old = &r.m.functions[f];
@@ -818,8 +843,13 @@ fn redirect_uses(m: &mut Module, map: &std::collections::HashMap<u32, u32>) -> R
         }
     }
     let used_in_constants = m.consts.iter().any(|c| const_refs_any(c, map));
-    let used_in_md = m.metadata.iter().any(|md| matches!(md, Metadata::Value { value: Value::Global(GlobalId::Function(f)), .. } if map.contains_key(f)));
-    let used_in_globals = m.globals.iter().any(|g| matches!(g.initializer, Some(Value::Global(GlobalId::Function(f))) if map.contains_key(&f)))
+    let used_in_md = m.metadata.iter().any(
+        |md| matches!(md, Metadata::Value { value: Value::Global(GlobalId::Function(f)), .. } if map.contains_key(f)),
+    );
+    let used_in_globals = m
+        .globals
+        .iter()
+        .any(|g| matches!(g.initializer, Some(Value::Global(GlobalId::Function(f))) if map.contains_key(&f)))
         || m.aliases.iter().any(|a| matches!(a.aliasee, Value::Global(GlobalId::Function(f)) if map.contains_key(&f)));
     if used_in_constants || used_in_md || used_in_globals {
         return Err(super::unsupported(None, "a renamed intrinsic used outside call instructions"));

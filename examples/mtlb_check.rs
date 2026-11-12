@@ -37,7 +37,8 @@ fn parse_readobj(text: &str) -> Node {
             continue;
         }
         // Block openers: "Name {", "Name [", and flag lists "Flags [ (0x842)".
-        let opener = t.strip_suffix(" {").or_else(|| t.strip_suffix(" [")).or_else(|| t.split_once(" [ (").map(|x| x.0));
+        let opener =
+            t.strip_suffix(" {").or_else(|| t.strip_suffix(" [")).or_else(|| t.split_once(" [ (").map(|x| x.0));
         if let Some(name) = opener {
             stack.push(Node { name: name.to_string(), ..Default::default() });
             continue;
@@ -68,11 +69,7 @@ fn num(v: &str) -> Option<u64> {
         _ => v,
     };
     let v = v.trim();
-    if let Some(h) = v.strip_prefix("0x") {
-        u64::from_str_radix(h, 16).ok()
-    } else {
-        v.parse().ok()
-    }
+    if let Some(h) = v.strip_prefix("0x") { u64::from_str_radix(h, 16).ok() } else { v.parse().ok() }
 }
 
 fn yes(v: &str) -> Option<bool> {
@@ -157,7 +154,8 @@ fn compare(lib: &Metallib, ro: &Node) -> Result<usize, String> {
         return Err("optional header sections differ".into());
     }
     let sections = find(ro, "Sections").ok_or("no Sections")?;
-    let section = |name: &str| sections.children.iter().find(|s| s.fields.iter().any(|(k, v)| k == "Name" && v == name));
+    let section =
+        |name: &str| sections.children.iter().find(|s| s.fields.iter().any(|(k, v)| k == "Name" && v == name));
     // Functions.
     let fl = section("FUNCTION_LIST").ok_or("no FUNCTION_LIST")?;
     let fns = find(fl, "Functions").map(|n| &n.children[..]).unwrap_or(&[]);
@@ -201,8 +199,12 @@ fn compare(lib: &Metallib, ro: &Node) -> Result<usize, String> {
                 "ModuleSize" => eq(&what, f.module.map(|m| m.len() as u64), num(v))?,
                 "ReflectionOffset" => eq(&what, f.reflection_offset, num(v))?,
                 "PostTessellationPatchType" => eq(&what, f.tessellation.map(|t| t.patch_type as u64), num(v))?,
-                "PostTessellationControlPointCount" => eq(&what, f.tessellation.map(|t| t.control_points as u64), num(v))?,
-                "RenderTargetArrayIndexDataType" => eq(&what, f.render_target_array_index_type.map(|x| x as u64), num(v))?,
+                "PostTessellationControlPointCount" => {
+                    eq(&what, f.tessellation.map(|t| t.control_points as u64), num(v))?
+                }
+                "RenderTargetArrayIndexDataType" => {
+                    eq(&what, f.render_target_array_index_type.map(|x| x as u64), num(v))?
+                }
                 "UnspecializedFunctionHash" => {
                     checked.set(checked.get() + 1);
                     if f.specialization.map(|s| hex(&s.unspecialized_hash)).as_deref() != Some(v.as_str()) {
@@ -265,24 +267,46 @@ fn compare(lib: &Metallib, ro: &Node) -> Result<usize, String> {
     ] {
         let ro_sizes: Vec<u64> = section(name)
             .and_then(|s| find(s, list))
-            .map(|n| n.children.iter().filter_map(|c| c.fields.iter().find(|(k, _)| k == "DataSize").and_then(|(_, v)| num(v))).collect())
+            .map(|n| {
+                n.children
+                    .iter()
+                    .filter_map(|c| c.fields.iter().find(|(k, _)| k == "DataSize").and_then(|(_, v)| num(v)))
+                    .collect()
+            })
             .unwrap_or_default();
-        let sizes: Vec<u64> = lib.section_records(which).map_err(|e| e.to_string())?.iter().map(|rec| rec.size as u64).collect();
+        let sizes: Vec<u64> =
+            lib.section_records(which).map_err(|e| e.to_string())?.iter().map(|rec| rec.size as u64).collect();
         checked.set(checked.get() + 1);
         if sizes != ro_sizes {
             return Err(format!("{} record sizes: reader {:?}, readobj {:?}", name, sizes, ro_sizes));
         }
     }
-    let ro_name = section("DYNAMIC_HEADER").and_then(|d| find(d, "DynamicHeader")).and_then(|n| n.fields.iter().find(|(k, _)| k == "LibraryInstallName")).map(|x| x.1.clone());
+    let ro_name = section("DYNAMIC_HEADER")
+        .and_then(|d| find(d, "DynamicHeader"))
+        .and_then(|n| n.fields.iter().find(|(k, _)| k == "LibraryInstallName"))
+        .map(|x| x.1.clone());
     let tags = lib.dynamic_header_tags().map_err(|e| e.to_string())?;
-    let ours = tags.iter().find(|t| &t.name == b"NAME").map(|t| String::from_utf8_lossy(&t.data[..t.data.len().saturating_sub(1)]).to_string());
+    let ours = tags
+        .iter()
+        .find(|t| &t.name == b"NAME")
+        .map(|t| String::from_utf8_lossy(&t.data[..t.data.len().saturating_sub(1)]).to_string());
     checked.set(checked.get() + 1);
     if ours != ro_name {
         return Err(format!("install name: reader {:?}, readobj {:?}", ours, ro_name));
     }
     // Symbols: every function name.
     let syms: Vec<String> = find(ro, "Symbols")
-        .map(|n| n.children.iter().filter_map(|c| c.fields.iter().find(|(k, _)| k == "Name").map(|(_, v)| v.rsplit_once(" (").map(|x| x.0.to_string()).unwrap_or(v.clone()))).collect())
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|c| {
+                    c.fields
+                        .iter()
+                        .find(|(k, _)| k == "Name")
+                        .map(|(_, v)| v.rsplit_once(" (").map(|x| x.0.to_string()).unwrap_or(v.clone()))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let names: Vec<String> = lib.functions.iter().map(|f| f.name.clone()).collect();
     checked.set(checked.get() + 1);

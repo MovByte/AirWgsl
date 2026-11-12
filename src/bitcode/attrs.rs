@@ -139,7 +139,9 @@ impl<'a> Reader<'a> {
                         }
                         let kind = self.attr_kind(code)?;
                         match kind {
-                            AttrKind::ByVal | AttrKind::StructRet | AttrKind::InAlloca => set.add(Attribute::Type(kind, None)),
+                            AttrKind::ByVal | AttrKind::StructRet | AttrKind::InAlloca => {
+                                set.add(Attribute::Type(kind, None))
+                            }
                             // UWTableKind::Default (async).
                             AttrKind::UWTable => set.add(Attribute::Int(kind, 2)),
                             k if k.class() == AttrClass::Enum => set.add(Attribute::Enum(k)),
@@ -294,7 +296,11 @@ impl<'a> Reader<'a> {
             }
             let index = if idx == FUNCTION_INDEX { u32::MAX } else { idx as u32 };
             if index != u32::MAX && index > MAX_PARAMS {
-                return self.unsupported(format!("attributes of parameter {} (this reader keeps at most {} parameters)", index - 1, MAX_PARAMS));
+                return self.unsupported(format!(
+                    "attributes of parameter {} (this reader keeps at most {} parameters)",
+                    index - 1,
+                    MAX_PARAMS
+                ));
             }
             if self.attr_groups.insert(grp, (index, set)).is_some() {
                 return self.malformed(format!("attribute group {} defined twice", grp));
@@ -383,7 +389,10 @@ impl<'a> Reader<'a> {
                     let pointee = param_bc_types.get(i).copied().flatten().and_then(|bc| self.contained(bc, 0));
                     let ty = match pointee.and_then(|p| self.bc_types.get(p as usize).copied().flatten()) {
                         Some(t) => t,
-                        None => return self.malformed(format!("missing parameter element type for the {} upgrade", kind.name())),
+                        None => {
+                            return self
+                                .malformed(format!("missing parameter element type for the {} upgrade", kind.name()));
+                        }
                     };
                     changed.add(Attribute::Type(kind, Some(ty)));
                 }

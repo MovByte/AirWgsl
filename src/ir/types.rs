@@ -36,14 +36,36 @@ pub enum Type {
     Int(u32),
     /// A pointer in an address space.
     Ptr(u32),
-    Function { ret: TypeId, params: Vec<TypeId>, vararg: bool },
+    Function {
+        ret: TypeId,
+        params: Vec<TypeId>,
+        vararg: bool,
+    },
     /// A literal (structurally uniqued) struct.
-    LiteralStruct { packed: bool, elems: Vec<TypeId> },
+    LiteralStruct {
+        packed: bool,
+        elems: Vec<TypeId>,
+    },
     /// An identified struct; `body` is `None` while opaque. Its name is empty when it is numbered.
-    Struct { name: String, packed: bool, body: Option<Vec<TypeId>> },
-    Array { len: u64, elem: TypeId },
-    Vector { len: u32, elem: TypeId, scalable: bool },
-    TargetExt { name: String, types: Vec<TypeId>, ints: Vec<u32> },
+    Struct {
+        name: String,
+        packed: bool,
+        body: Option<Vec<TypeId>>,
+    },
+    Array {
+        len: u64,
+        elem: TypeId,
+    },
+    Vector {
+        len: u32,
+        elem: TypeId,
+        scalable: bool,
+    },
+    TargetExt {
+        name: String,
+        types: Vec<TypeId>,
+        ints: Vec<u32>,
+    },
 }
 
 /// The floating-point formats, for constants of floating-point type.
@@ -275,7 +297,9 @@ impl TypeTable {
         match self.get(t) {
             Type::Array { elem, .. } => Some(*elem),
             Type::Vector { elem, .. } => Some(*elem),
-            Type::LiteralStruct { elems, .. } | Type::Struct { body: Some(elems), .. } => elems.get(index as usize).copied(),
+            Type::LiteralStruct { elems, .. } | Type::Struct { body: Some(elems), .. } => {
+                elems.get(index as usize).copied()
+            }
             _ => None,
         }
     }
@@ -306,8 +330,15 @@ impl TypeTable {
     fn is_sized_inner(&self, t: TypeId, visiting: &mut Vec<TypeId>) -> bool {
         match self.get(t) {
             Type::Int(_) | Type::Ptr(_) | Type::X86Amx => true,
-            Type::Half | Type::BFloat | Type::Float | Type::Double | Type::X86Fp80 | Type::Fp128 | Type::PpcFp128 => true,
-            Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } | Type::TargetExt { .. } => false,
+            Type::Half | Type::BFloat | Type::Float | Type::Double | Type::X86Fp80 | Type::Fp128 | Type::PpcFp128 => {
+                true
+            }
+            Type::Void
+            | Type::Label
+            | Type::Metadata
+            | Type::Token
+            | Type::Function { .. }
+            | Type::TargetExt { .. } => false,
             Type::Array { elem, .. } | Type::Vector { elem, .. } => self.is_sized_inner(*elem, visiting),
             Type::LiteralStruct { elems, .. } => elems.iter().all(|e| self.is_sized_inner(*e, visiting)),
             Type::Struct { body, .. } => match body {

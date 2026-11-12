@@ -325,7 +325,10 @@ impl<'a> Reader<'a> {
     }
 
     fn check_struct_element(&self, t: TypeId) -> Result<TypeId> {
-        if matches!(self.m.types.get(t), Type::Void | Type::Label | Type::Metadata | Type::Function { .. } | Type::Token) {
+        if matches!(
+            self.m.types.get(t),
+            Type::Void | Type::Label | Type::Metadata | Type::Function { .. } | Type::Token
+        ) {
             return self.malformed("invalid struct element type");
         }
         Ok(t)

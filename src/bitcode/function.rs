@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::codes::*;
 use super::constants::{self, Use};
-use super::{Reader, Result, Slot, VEntry, FWD};
+use super::{FWD, Reader, Result, Slot, VEntry};
 use crate::bitstream::Entry;
 use crate::ir::*;
 
@@ -177,7 +177,14 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn push_inst(&mut self, st: &mut FnState, ty: TypeId, op: Op, bc_ty: Option<u32>, numbered: bool) -> Result<InstId> {
+    fn push_inst(
+        &mut self,
+        st: &mut FnState,
+        ty: TypeId,
+        op: Op,
+        bc_ty: Option<u32>,
+        numbered: bool,
+    ) -> Result<InstId> {
         let bb = match st.cur_bb {
             Some(b) => b,
             None => return self.malformed("instruction outside any basic block"),
@@ -253,7 +260,11 @@ impl<'a> Reader<'a> {
                             st.seen_use_lists = true;
                         }
                         other => {
-                            return self.unsupported(format!("block {} ({}) in a function block", other, block_name(other)));
+                            return self.unsupported(format!(
+                                "block {} ({}) in a function block",
+                                other,
+                                block_name(other)
+                            ));
                         }
                     }
                     continue;
@@ -294,7 +305,9 @@ impl<'a> Reader<'a> {
         loop {
             let a = match self.cur.advance()? {
                 Entry::EndBlock => return Ok(()),
-                Entry::SubBlock(id) => return self.unsupported(format!("block {} ({}) in a use-list block", id, block_name(id))),
+                Entry::SubBlock(id) => {
+                    return self.unsupported(format!("block {} ({}) in a use-list block", id, block_name(id)));
+                }
                 Entry::Record(a) => a,
             };
             let r = self.cur.read_record(a)?;
@@ -404,8 +417,7 @@ impl<'a> Reader<'a> {
                     Value::Inst(i) => i.0 as usize,
                     _ => unreachable!(),
                 }]
-                .ty
-                    != ty
+                .ty != ty
                 {
                     return self.malformed("metadata value has the wrong type");
                 }
@@ -584,8 +596,20 @@ impl<'a> Reader<'a> {
                     && self.m.types.pointer_addrspace(src) != self.m.types.pointer_addrspace(dst)
                 {
                     let i64t = self.m.types.int(64);
-                    let tmp = self.push_inst(st, i64t, Op::Cast { op: CastOp::PtrToInt, value: v, flags: 0, fmf: FastMath::default() }, None, false)?;
-                    self.push_inst(st, dst, Op::Cast { op: CastOp::IntToPtr, value: Value::Inst(tmp), flags: 0, fmf: FastMath::default() }, Some(res_bc as u32), true)?;
+                    let tmp = self.push_inst(
+                        st,
+                        i64t,
+                        Op::Cast { op: CastOp::PtrToInt, value: v, flags: 0, fmf: FastMath::default() },
+                        None,
+                        false,
+                    )?;
+                    self.push_inst(
+                        st,
+                        dst,
+                        Op::Cast { op: CastOp::IntToPtr, value: Value::Inst(tmp), flags: 0, fmf: FastMath::default() },
+                        Some(res_bc as u32),
+                        true,
+                    )?;
                     return Ok(());
                 }
                 if !constants::cast_is_valid(&self.m.types, op, src, dst) {
@@ -776,7 +800,8 @@ impl<'a> Reader<'a> {
                     let (c, cty, _) = self.value_type_pair(st, ops, &mut i)?;
                     let ok = match self.m.types.get(cty) {
                         Type::Vector { elem, len, .. } => {
-                            self.m.types.int_bits(*elem) == Some(1) && self.m.types.vector_len(ty).map(|n| n == *len).unwrap_or(false)
+                            self.m.types.int_bits(*elem) == Some(1)
+                                && self.m.types.vector_len(ty).map(|n| n == *len).unwrap_or(false)
                         }
                         Type::Int(1) => true,
                         _ => false,
@@ -964,7 +989,12 @@ impl<'a> Reader<'a> {
                         _ => return self.malformed("switch case is not a constant"),
                     };
                     let cid = match c {
-                        Value::Const(cid) if matches!(self.m.constant(cid).kind, ConstKind::Int(_)) && self.m.constant(cid).ty == ty => cid,
+                        Value::Const(cid)
+                            if matches!(self.m.constant(cid).kind, ConstKind::Int(_))
+                                && self.m.constant(cid).ty == ty =>
+                        {
+                            cid
+                        }
                         _ => return self.malformed("switch case is not an integer constant of the condition's type"),
                     };
                     let b = self.block(st, pair[1])?;
@@ -1112,9 +1142,18 @@ impl<'a> Reader<'a> {
                     }
                     align = self.layout.as_ref().unwrap().abi_align(&self.m.types, ty);
                 }
-                self.push_inst(st, ty, Op::Load { ptr, align: align.unwrap(), volatile, atomic: at }, Some(res_bc), true)?;
+                self.push_inst(
+                    st,
+                    ty,
+                    Op::Load { ptr, align: align.unwrap(), volatile, atomic: at },
+                    Some(res_bc),
+                    true,
+                )?;
             }
-            FUNC_CODE_INST_STORE | FUNC_CODE_INST_STORE_OLD | FUNC_CODE_INST_STOREATOMIC | FUNC_CODE_INST_STOREATOMIC_OLD => {
+            FUNC_CODE_INST_STORE
+            | FUNC_CODE_INST_STORE_OLD
+            | FUNC_CODE_INST_STOREATOMIC
+            | FUNC_CODE_INST_STOREATOMIC_OLD => {
                 let atomic = matches!(code, FUNC_CODE_INST_STOREATOMIC | FUNC_CODE_INST_STOREATOMIC_OLD);
                 let mut i = 0;
                 let (ptr, pty, pbc) = self.value_type_pair(st, ops, &mut i)?;
@@ -1162,7 +1201,13 @@ impl<'a> Reader<'a> {
                     align = self.layout.as_ref().unwrap().abi_align(&self.m.types, vty);
                 }
                 let void = self.m.types.void();
-                self.push_inst(st, void, Op::Store { value: val, ptr, align: align.unwrap(), volatile, atomic: at }, None, true)?;
+                self.push_inst(
+                    st,
+                    void,
+                    Op::Store { value: val, ptr, align: align.unwrap(), volatile, atomic: at },
+                    None,
+                    true,
+                )?;
             }
             FUNC_CODE_INST_CMPXCHG => {
                 let mut i = 0;
@@ -1209,7 +1254,13 @@ impl<'a> Reader<'a> {
                 let ty = self.m.types.intern(Type::LiteralStruct { packed: false, elems: vec![cty, i1] });
                 let i1bc = self.virtual_type(i1, vec![]);
                 let bc = self.virtual_type(ty, vec![cbc, i1bc]);
-                self.push_inst(st, ty, Op::CmpXchg { ptr, cmp, new, align, volatile, weak, success, failure, scope }, Some(bc), true)?;
+                self.push_inst(
+                    st,
+                    ty,
+                    Op::CmpXchg { ptr, cmp, new, align, volatile, weak, success, failure, scope },
+                    Some(bc),
+                    true,
+                )?;
             }
             FUNC_CODE_INST_ATOMICRMW => {
                 let mut i = 0;
@@ -1242,7 +1293,13 @@ impl<'a> Reader<'a> {
                         _ => return self.malformed("atomicrmw of a type without a power-of-two size"),
                     },
                 };
-                self.push_inst(st, vty, Op::AtomicRmw { op, ptr, value: val, align, volatile, ordering, scope }, Some(vbc), true)?;
+                self.push_inst(
+                    st,
+                    vty,
+                    Op::AtomicRmw { op, ptr, value: val, align, volatile, ordering, scope },
+                    Some(vbc),
+                    true,
+                )?;
             }
             FUNC_CODE_INST_CMPXCHG_OLD | FUNC_CODE_INST_ATOMICRMW_OLD => {
                 return self.unsupported("cmpxchg and atomicrmw records of LLVM before 13");
@@ -1315,7 +1372,9 @@ impl<'a> Reader<'a> {
             | FUNC_CODE_INST_CATCHRET
             | FUNC_CODE_INST_CATCHPAD
             | FUNC_CODE_INST_CLEANUPPAD
-            | FUNC_CODE_INST_CATCHSWITCH => return self.unsupported(format!("exception-handling instruction (record {})", code)),
+            | FUNC_CODE_INST_CATCHSWITCH => {
+                return self.unsupported(format!("exception-handling instruction (record {})", code));
+            }
             FUNC_CODE_INST_CALLBR => return self.unsupported("callbr"),
             c => return self.malformed(format!("unknown function record code {}", c)),
         }
@@ -1414,7 +1473,10 @@ impl<'a> Reader<'a> {
         }
         let (fn_ty, fn_bc) = match fty {
             Some(x) => x,
-            None => match self.contained(cbc, 0).and_then(|b| self.bc_types.get(b as usize).copied().flatten().map(|t| (t, b))) {
+            None => match self
+                .contained(cbc, 0)
+                .and_then(|b| self.bc_types.get(b as usize).copied().flatten().map(|t| (t, b)))
+            {
                 Some((t, b)) if self.m.types.is_function(t) => (t, b),
                 _ => return self.malformed("callee is not of pointer to function type"),
             },
@@ -1466,14 +1528,14 @@ impl<'a> Reader<'a> {
             tail = TailKind::NoTail;
         }
         if let Value::InlineAsm(_) = callee {
-            return self.unsupported("calls to inline assembly (the elementtype upgrade for indirect constraints is not implemented)");
+            return self.unsupported(
+                "calls to inline assembly (the elementtype upgrade for indirect constraints is not implemented)",
+            );
         }
         if let Value::Global(GlobalId::Function(cf)) = callee {
             let name = &self.m.functions[cf as usize].common.name;
-            if matches!(
-                name.as_str(),
-                "llvm.preserve.array.access.index" | "llvm.preserve.struct.access.index"
-            ) || name.starts_with("llvm.aarch64.ldaxr")
+            if matches!(name.as_str(), "llvm.preserve.array.access.index" | "llvm.preserve.struct.access.index")
+                || name.starts_with("llvm.aarch64.ldaxr")
                 || name.starts_with("llvm.aarch64.ldxr")
                 || name.starts_with("llvm.aarch64.stlxr")
                 || name.starts_with("llvm.aarch64.stxr")

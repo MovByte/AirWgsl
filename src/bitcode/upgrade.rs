@@ -357,7 +357,9 @@ fn upgrade_module_flags(r: &mut Reader) {
             Some(Metadata::String(s)) => s,
             _ => continue,
         };
-        let set_op = |m: &mut Module, new: Vec<Option<MdId>>| -> MdId { m.intern_md(Metadata::Tuple { distinct: false, ops: new }) };
+        let set_op = |m: &mut Module, new: Vec<Option<MdId>>| -> MdId {
+            m.intern_md(Metadata::Tuple { distinct: false, ops: new })
+        };
         let mut replacement = None;
         match id.as_slice() {
             b"Objective-C Image Info Version" => has_objc = true,

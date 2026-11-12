@@ -134,12 +134,22 @@ fn main() {
             wu.sort();
             wm.sort();
             if units != wu {
-                return Err(format!("units differ: reader {:?}, index {:?}", units.iter().take(3).collect::<Vec<_>>(), wu.iter().take(3).collect::<Vec<_>>()));
+                return Err(format!(
+                    "units differ: reader {:?}, index {:?}",
+                    units.iter().take(3).collect::<Vec<_>>(),
+                    wu.iter().take(3).collect::<Vec<_>>()
+                ));
             }
             if modules != wm {
                 let only_ours: Vec<_> = modules.iter().filter(|m| !wm.contains(m)).take(2).collect();
                 let only_index: Vec<_> = wm.iter().filter(|m| !modules.contains(m)).take(2).collect();
-                return Err(format!("modules differ ({} vs {}): reader only {:?}, index only {:?}", modules.len(), wm.len(), only_ours, only_index));
+                return Err(format!(
+                    "modules differ ({} vs {}): reader only {:?}, index only {:?}",
+                    modules.len(),
+                    wm.len(),
+                    only_ours,
+                    only_index
+                ));
             }
             for u in &units {
                 *kinds.entry(u.0.clone()).or_default() += 1;
@@ -160,7 +170,15 @@ fn main() {
         }
     }
     let kinds: Vec<String> = kinds.iter().map(|(k, n)| format!("{}={}", k, n)).collect();
-    println!("files={} ok={} mismatch={} units={} ({}) modules={}", files.len(), ok, bad, n_units, kinds.join(","), n_modules);
+    println!(
+        "files={} ok={} mismatch={} units={} ({}) modules={}",
+        files.len(),
+        ok,
+        bad,
+        n_units,
+        kinds.join(","),
+        n_modules
+    );
     if bad != 0 {
         std::process::exit(1);
     }
