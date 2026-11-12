@@ -181,6 +181,47 @@ fn reflection_inputs_come_from_the_canonical_function() {
     assert_eq!(inputs.slots.get(&global("slot")), Some(&8));
 }
 
+/// The compiler canonicalizes a stage with its function constant values before lowering it, and reflects it with
+/// the values canonicalization determined.
+#[test]
+#[allow(clippy::result_large_err)]
+fn compile_canonicalizes_with_the_function_constants() {
+    use airwgsl::api::{AirModule, ComputeState, EntryPoint, HostCaps, PipelineDesc, PipelineKind};
+    let compile = |constants: Vec<FunctionConstant>| {
+        let m = AirModule {
+            hash: [0; 32],
+            bitcode: std::sync::Arc::from(&include_bytes!("ir/static_init.bc")[..]),
+            entry: Some(EntryPoint { function: "test".into(), function_type: 3, constants }),
+        };
+        let desc = PipelineDesc {
+            kind: PipelineKind::Compute(ComputeState {
+                threads_per_threadgroup: [1, 1, 1],
+                non_uniform_grid: false,
+                threadgroup_memory_lengths: Vec::new(),
+                stage_input: None,
+            }),
+            bindings: Vec::new(),
+        };
+        airwgsl::api::compile(&[m], &desc, &HostCaps::default())
+    };
+    let with = |i: u64, ty: u64, v: &[u8]| FunctionConstant { index: i, name: None, data_type: ty, value: v.to_vec() };
+    let c = compile(vec![with(0, 29, &[5, 0, 0, 0]), with(1, 53, &[1])]).unwrap_or_else(|r| panic!("{}", r));
+    let args = &c.reflection.stages[0].arguments;
+    let arg = |n: &str| args.iter().find(|a| a.name == n);
+    // The optional argument exists (fc_b), at buffer index fc_i + 1, unused by the canonical function.
+    assert_eq!(arg("opt").map(|a| (a.index, a.active)), Some((6, false)));
+    assert_eq!(arg("out").map(|a| (a.index, a.active)), Some((0, true)));
+    // The stored value is the constructor's fc_i * 2.
+    assert!(c.wgsl[0].source.contains("= 10u;"), "{}", c.wgsl[0].source);
+    // Unset: the predicate removes the argument; the value is the default 7 times 2.
+    let c = compile(Vec::new()).unwrap_or_else(|r| panic!("{}", r));
+    assert!(c.reflection.stages[0].arguments.iter().all(|a| a.name != "opt"));
+    assert!(c.wgsl[0].source.contains("= 14u;"), "{}", c.wgsl[0].source);
+    // A value of another type is rejected, as Metal rejects it.
+    let r = compile(vec![with(0, 3, &[0; 4])]).unwrap_err();
+    assert!(r.reason.starts_with("[compiler:function-constant-type]"), "{}", r);
+}
+
 /// The specialization rules against the measured Metal behavior.
 #[test]
 fn function_constants_follow_metal() {

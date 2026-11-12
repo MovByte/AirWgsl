@@ -37,14 +37,24 @@ use super::{Canonical, ENTRY_LISTS, record_function, specialize};
 /// reports active most of the arguments that only callees ignoring them received (textures passed by value in
 /// `texture2d` structs), and inactive the buffers and samplers this set finds unused that the front end did not mark.
 pub fn inputs(c: &Canonical) -> Inputs {
-    let m = &c.module;
     let back: BTreeMap<u32, u32> = c.globals.iter().map(|(s, d)| (*d, *s)).collect();
+    inputs_keyed(c, |g| back.get(&g).copied())
+}
+
+/// [`inputs`] keyed by the canonical module's own global indices: for reflecting the canonical module (decoded by
+/// the AIR semantic layer) rather than the stage module.
+pub fn canonical_inputs(c: &Canonical) -> Inputs {
+    inputs_keyed(c, Some)
+}
+
+fn inputs_keyed(c: &Canonical, key: impl Fn(u32) -> Option<u32>) -> Inputs {
+    let m = &c.module;
     let mut predicates = BTreeMap::new();
     let mut slots = BTreeMap::new();
     let dl = DataLayout::parse(&m.datalayout).unwrap_or_default();
     let mut mem = Memory::new();
     for g in record_globals(m, c.function) {
-        let Some(&stage) = back.get(&g) else { continue };
+        let Some(stage) = key(g) else { continue };
         let Ok(r) = interp::global_region(m, g, &mut mem) else { continue };
         let ty = m.globals[g as usize].value_type;
         let size = dl.store_size(&m.types, ty).unwrap_or(0) as usize;

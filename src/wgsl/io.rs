@@ -123,12 +123,36 @@ pub fn output_key(role: &OutputRole) -> &'static str {
     }
 }
 
-/// A binding index: function constants that give it are resolved by specialization (package S3).
-fn slot_value(m: &Module, fi: usize, s: Slot, what: &str) -> Result<u64, Refusal> {
+/// A binding index: one a global gives takes the value canonicalization left in the global (the function constant's,
+/// or the static initializer's result).
+fn slot_value(cx: &Ctx, s: Slot, what: &str) -> Result<u64, Refusal> {
     match s {
         Slot::Value(v) => Ok(v as u64),
-        Slot::Constant(_) => Err(tracked::refuse_family("function-constants", what.to_string(), loc(m, fi))),
+        Slot::Constant(g) => match cx.values.slots.get(&g) {
+            Some(v) => Ok(*v as u64),
+            None => {
+                Err(unresolved(cx, what, &format!("the binding index global @{} has no value", global_name(cx, g))))
+            }
+        },
     }
+}
+
+/// Whether an argument or output that carries a function-constant predicate exists in the specialized function.
+fn predicate_holds(cx: &Ctx, p: &crate::air::Predicate, what: &str) -> Result<bool, Refusal> {
+    cx.values.predicates.get(&p.global).copied().ok_or_else(|| {
+        unresolved(cx, what, &format!("the predicate global @{} has no value", global_name(cx, p.global)))
+    })
+}
+
+fn global_name(cx: &Ctx, g: u32) -> String {
+    cx.m.globals.get(g as usize).map(|v| v.common.name.clone()).unwrap_or_default()
+}
+
+/// A function-constant record canonicalization left without a value.
+fn unresolved(cx: &Ctx, what: &str, detail: &str) -> Refusal {
+    let mut r = tracked::refuse_family("function-constants", what.to_string(), loc(cx.m, cx.entry.function as usize));
+    r.reason = format!("{} ({})", r.reason, detail);
+    r
 }
 
 fn loc(m: &Module, fi: usize) -> Option<Location> {
@@ -384,6 +408,8 @@ pub struct Ctx<'a> {
     pub varyings: &'a Varyings,
     /// IR arguments that some instruction uses.
     pub used: &'a [bool],
+    /// What canonicalization determined: the predicate values and the binding indices globals give.
+    pub values: &'a crate::reflect::Inputs,
     /// The registered rules: an argument kind a rule claims becomes a handle for its calls.
     pub rules: &'a super::hooks::Rules,
 }
@@ -481,9 +507,28 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
         let name = format!("aw_a{}", i);
         let kind = role_key(&r.role);
         let unused = r.unused || !cx.used[i];
-        if r.predicate.is_some() && !unused {
-            // The argument exists only when a function-constant predicate holds: specialization decides it.
-            return Err(tracked::refuse_family("function-constants", kind.to_string(), loc(m, fi)));
+        // An argument whose function-constant predicate is false does not exist in the specialized function: it
+        // takes no binding, and the canonical function must not use it. An unused argument needs no predicate value.
+        if let Some(p) = &r.predicate {
+            match cx.values.predicates.get(&p.global) {
+                Some(true) => {}
+                Some(false) if unused => continue,
+                Some(false) => {
+                    return Err(unresolved(
+                        cx,
+                        kind,
+                        "the function uses an argument its function-constant predicate removes",
+                    ));
+                }
+                None if unused => {}
+                None => {
+                    return Err(unresolved(
+                        cx,
+                        kind,
+                        &format!("the predicate global @{} has no value", global_name(cx, p.global)),
+                    ));
+                }
+            }
         }
         let t = a.ty;
         let bind = |it: &mut Interface, expr: String| it.prologue.push(format!("let {} = {};", name, expr));
@@ -498,7 +543,7 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
                 if unused {
                     continue;
                 }
-                let index = slot_value(m, fi, b.location.index, kind)?;
+                let index = slot_value(cx, b.location.index, kind)?;
                 let space = b.address_space.or(m.types.pointer_addrspace(t)).unwrap_or(1);
                 if space == 3 {
                     // A [[threadgroup(index)]] argument: memory of the length the dispatch sets for the index.
@@ -757,8 +802,11 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
     let mut convs = Vec::new();
     for (k, (o, t)) in e.outputs.iter().zip(&members).enumerate() {
         let kind = output_key(&o.role);
-        if o.predicate.is_some() {
-            return Err(tracked::refuse_family("function-constants", kind.to_string(), loc(m, fi)));
+        // An output whose function-constant predicate is false does not exist: its member is not written out.
+        if let Some(p) = &o.predicate
+            && !predicate_holds(cx, p, kind)?
+        {
+            continue;
         }
         let member = if is_struct { format!("{{}}.m{}", k) } else { "{}".to_string() };
         let field = format!("o{}", k);
@@ -821,7 +869,7 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
             }
             // MSL Table 5.7 color(n) and WGSL @location(n) on a fragment output: the value goes to color attachment n.
             (OutputRole::RenderTarget { index, blend_index }, MetalStage::Fragment) => {
-                let color = slot_value(m, fi, *index, kind)?;
+                let color = slot_value(cx, *index, kind)?;
                 if *blend_index != 0 {
                     return Err(stage_refusal(
                         m,

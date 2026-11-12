@@ -3,11 +3,13 @@
 //! # Input
 //!
 //! The lowering works on a *canonical function*: an entry point whose module holds no call of a defined function,
-//! no unresolved function constant and no static initializer, which is what package S3's `canonicalize` produces (plan
-//! 5.1 stage 5). Until S3 lands, a module is taken as it is read when it is already in that form (the front end
-//! inlines at `-O`), and otherwise refused with the S3-owned tracked item, so no input is lowered with a construct
-//! skipped. The entry point comes typed from the AIR semantic layer ([`crate::air`]), and the reflection from
-//! [`crate::reflect`].
+//! no unresolved function constant and no static initializer, which [`crate::passes::canonicalize_air`] produces
+//! (plan 5.1 stage 5): [`compile`] canonicalizes each stage module, linked with the pipeline's modules that are not
+//! stages, with the stage's function constant values ([`canonical_input`]), and lowers the canonical module. The
+//! entry point comes typed from the AIR semantic layer ([`crate::air`]) decoding the canonical module, and the
+//! reflection from [`crate::reflect`] with the values canonicalization determined
+//! ([`crate::passes::reflection::canonical_inputs`]: predicate values, binding slots computed from constants, and the
+//! arguments the canonical function does not use). [`check_canonical`] still verifies the form before lowering.
 //!
 //! # Output
 //!
@@ -62,6 +64,9 @@ pub struct Input {
     /// The entry's stage.
     pub stage: MetalStage,
     pub dl: DataLayout,
+    /// What reflection needs from canonicalization; for a module taken as it was read ([`input_of`]), only the
+    /// arguments its function does not use.
+    pub reflection: crate::reflect::Inputs,
 }
 
 fn unreadable(detail: String) -> Refusal {
@@ -103,20 +108,57 @@ pub fn input_of(module: air::AirModule, function: &str, function_type: u64) -> R
     }
     let stage = metal_stage(&entry)?;
     let dl = DataLayout::parse(&module.ir.datalayout).map_err(unreadable)?;
-    Ok(Input { module, entry, stage, dl })
+    // A module taken as it is read determines no function constant: only the arguments its function does not use.
+    let used = used_args(&module.ir, entry.function as usize);
+    let reflection = crate::reflect::Inputs {
+        unused_arguments: used.iter().enumerate().filter(|(_, u)| !**u).map(|(k, _)| k as u32).collect(),
+        ..Default::default()
+    };
+    Ok(Input { module, entry, stage, dl, reflection })
 }
 
-/// Read a stage's module and find its entry.
-pub fn input(m: &AirModule) -> R<Input> {
-    let ep = m.entry.as_ref().ok_or_else(|| {
-        tracked::refuse("non-canonical-input", "module", None, "a linked module (linking is canonicalization's)")
+/// Canonicalize entry `function` of `stage` (linked with `libraries`, specialized with `constants`) and make the
+/// canonical module, decoded by the AIR semantic layer, an input; its reflection inputs come from the
+/// canonicalization.
+pub fn canonical_input(
+    stage: &air::AirModule,
+    libraries: &[air::AirModule],
+    function: &str,
+    function_type: u64,
+    constants: &[FunctionConstant],
+) -> R<Input> {
+    let entry = stage.entry_point(function).cloned().ok_or_else(|| {
+        tracked::refuse(
+            "entry-metadata",
+            function.to_string(),
+            None,
+            "the function is not an entry point of the module",
+        )
     })?;
-    if !ep.constants.is_empty() {
-        return Err(tracked::refuse_family("function-constants", ep.function.clone(), None));
-    }
+    metal_stage(&entry)?;
+    let modules: Vec<air::AirModule> = std::iter::once(stage.clone()).chain(libraries.iter().cloned()).collect();
+    let c = crate::passes::canonicalize_air(&modules, &entry, constants)?;
+    let reflection = crate::passes::reflection::canonical_inputs(&c);
+    let decoded = air::AirModule::decode(c.module).map_err(tracked::name_item)?;
+    let mut inp = input_of(decoded, function, function_type)?;
+    inp.reflection = reflection;
+    Ok(inp)
+}
+
+/// Read and decode a pipeline module.
+fn decode(m: &AirModule) -> R<air::AirModule> {
     let ir = crate::parse_bitcode(&m.bitcode).map_err(|e| unreadable(e.to_string()))?;
-    let module = air::AirModule::decode(ir).map_err(tracked::name_item)?;
-    input_of(module, &ep.function, ep.function_type)
+    air::AirModule::decode(ir).map_err(tracked::name_item)
+}
+
+/// Read a stage's module, canonicalize its entry with the pipeline's other modules (`libraries`) and its function
+/// constant values, and make it an input.
+pub fn input(m: &AirModule, libraries: &[air::AirModule]) -> R<Input> {
+    let ep = m.entry.as_ref().ok_or_else(|| {
+        tracked::refuse("non-canonical-input", "module", None, "a linked module is not a stage (it is linked into one)")
+    })?;
+    let module = decode(m)?;
+    canonical_input(&module, libraries, &ep.function, ep.function_type, &ep.constants)
 }
 
 /// Refuse a function that is not in canonical form.
@@ -296,7 +338,18 @@ pub fn lower_stage(
     })?;
     let bindings = desc.bindings.iter().find(|b| b.stage == stage);
     let used = used_args(m, fi);
-    let icx = io::Ctx { m, entry: &inp.entry, stage, desc, host, bindings, varyings, used: &used, rules };
+    let icx = io::Ctx {
+        m,
+        entry: &inp.entry,
+        stage,
+        desc,
+        host,
+        bindings,
+        varyings,
+        used: &used,
+        values: &inp.reflection,
+        rules,
+    };
     let iface = io::lower(&icx, layout)?;
     let shared_device = stage != MetalStage::Vertex;
     let mem = Memory::analyze(m, fi, &inp.dl, &iface.regions, shared_device)?;
@@ -455,9 +508,14 @@ pub fn compile_with(
     rules: &Rules,
     rounding: &Rounding,
 ) -> R<Compiled> {
+    // Modules without an entry are linked into the stages: imported libraries and linked functions.
+    let mut libraries = Vec::new();
+    for m in stage_modules.iter().filter(|m| m.entry.is_none()) {
+        libraries.push(decode(m)?);
+    }
     let mut inputs = Vec::new();
-    for m in stage_modules {
-        inputs.push(input(m)?);
+    for m in stage_modules.iter().filter(|m| m.entry.is_some()) {
+        inputs.push(input(m, &libraries)?);
     }
     let by = |s: MetalStage| inputs.iter().filter(|i| i.stage == s).collect::<Vec<_>>();
     let order: Vec<&Input> = match &desc.kind {
@@ -552,16 +610,11 @@ pub fn compile_with(
         rules.check_stage(s.stage, &inp.module.ir.functions[inp.entry.function as usize].common.name, &source)?;
         wgsl.push(Stage { stage: shader_stage(s.stage), entry_point: ENTRY_POINT.into(), source });
     }
-    // Reflection from the AIR metadata (package S2): the arguments the canonical function does not use are reported
-    // inactive, as real Metal reports them after its own optimization.
+    // Reflection from the AIR metadata (package S2) with what canonicalization determined: predicate values, binding
+    // slots computed from function constants, and the arguments the canonical function does not use.
     let mut stages_reflection = Vec::new();
     for i in &order {
-        let fi = i.entry.function as usize;
-        let used = used_args(&i.module.ir, fi);
-        let inputs = crate::reflect::Inputs {
-            unused_arguments: used.iter().enumerate().filter(|(_, u)| !**u).map(|(k, _)| k as u32).collect(),
-            ..Default::default()
-        };
+        let inputs = &i.reflection;
         let stage_input = match (&desc.kind, i.stage) {
             (PipelineKind::Render(r), MetalStage::Vertex) => match &r.vertex_descriptor {
                 Some(vd) => crate::reflect::StageInput::Vertex(vd),
@@ -574,7 +627,7 @@ pub fn compile_with(
             _ => crate::reflect::StageInput::None,
         };
         stages_reflection
-            .push(crate::reflect::stage(&i.module, &i.entry, &inputs, stage_input).map_err(tracked::name_item)?);
+            .push(crate::reflect::stage(&i.module, &i.entry, inputs, stage_input).map_err(tracked::name_item)?);
     }
     let reflection = Reflection { stages: stages_reflection };
     Ok(Compiled { wgsl, layout: layout.binding_layout(), passes: vec![PassPlan::Direct], reflection, requirements })
