@@ -217,7 +217,8 @@ pub const ITEMS: &[Item] = &[
         id: "entry-metadata",
         owner: Some("S2"),
         kind: RefusalKind::NotImplemented,
-        summary: "an entry-point or argument record outside the forms the stage-interface reader decodes",
+        summary: "an entry-point or argument record the AIR semantic layer does not decode, or one that does not match \
+                  the function",
         reference: "plan 5.1 stage 4",
     },
     Item {
@@ -242,6 +243,13 @@ pub const ITEMS: &[Item] = &[
         summary: "a buffer the shader writes that the draw also binds as a vertex or index buffer: no WebGPU usage \
                   scope allows both",
         reference: "plan 5.5",
+    },
+    Item {
+        id: "threadgroup-size",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a dispatch with more threads per threadgroup than the kernel's [[max_total_threads_per_threadgroup]]",
+        reference: "MSL 5.1.3",
     },
     Item {
         id: "module-unreadable",
@@ -324,6 +332,20 @@ pub fn refuse_family(family: &str, construct: impl Into<String>, location: Optio
         reason: format!("[family:{}] {}", family, why),
         reference: None,
     }
+}
+
+/// A refusal from another layer (the AIR semantic layer's closed grammar) that names no tracked item: named by the
+/// intrinsics.toml family of its construct when it is an `air.*` name, otherwise as an entry-point record outside the
+/// decoded grammar (package S2's).
+pub fn name_item(mut r: Refusal) -> Refusal {
+    if item_of(&r).is_some() {
+        return r;
+    }
+    r.reason = match family_of(&r.construct) {
+        Some(f) => format!("[family:{}] {}", f, r.reason),
+        None => format!("[compiler:entry-metadata] {}", r.reason),
+    };
+    r
 }
 
 /// The tracked item a refusal names: (namespace, id).

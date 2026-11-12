@@ -4,9 +4,9 @@
 //! wgpu and Dawn and the counters (sums, independent of the order of the adds) must agree.
 
 use super::harness::{air, case_dir, dawn_node, first_difference, run_dawn, run_metal, run_wgpu};
+use airwgsl::air::{Argument, Role, Slot};
 use airwgsl::api::*;
 use airwgsl::num::Rounding;
-use airwgsl::wgsl::entry::Record;
 use airwgsl::wgsl::hooks::{CallRule, CallSite, Effect, RuleCx, Rules, StageCx, StageRule};
 use std::sync::Arc;
 
@@ -97,7 +97,13 @@ impl CallRule for TextureWidth {
 
     fn lower(&self, cx: &mut dyn RuleCx, call: &CallSite<'_>) -> Result<Option<String>, Refusal> {
         let arg = cx.handle_arg(call.args[0]).expect("a texture argument");
-        let index = cx.arg_record(arg).and_then(|r| r.int_after("air.location_index", 0)).expect("a texture index");
+        let index = match cx.arg_record(arg).map(|r| r.role) {
+            Some(Role::Texture { location, .. }) => match location.index {
+                Slot::Value(i) => i as u64,
+                Slot::Constant(_) => panic!("a texture index from a function constant"),
+            },
+            other => panic!("not a texture: {:?}", other),
+        };
         let t = cx.resource(
             BindingResource::Texture {
                 sample_type: TextureSampleType::Float,
@@ -163,9 +169,10 @@ impl StageRule for Float4Attribute {
         stage == MetalStage::Vertex && kind == "air.vertex_input"
     }
 
-    fn argument(&self, cx: &mut dyn StageCx, arg: u32, record: &Record) -> Result<String, Refusal> {
-        let loc = record.int_after("air.location_index", 0).unwrap();
-        assert_eq!(record.type_name(), Some("float4"));
+    fn argument(&self, cx: &mut dyn StageCx, arg: u32, record: &Argument) -> Result<String, Refusal> {
+        let Role::VertexInput(l) = &record.role else { panic!("not a vertex input") };
+        let Slot::Value(loc) = l.index else { panic!("an attribute index from a function constant") };
+        assert_eq!(record.type_name.as_deref(), Some("float4"));
         cx.param(format!("@location({}) aw_vi{}: vec4<f32>", loc, arg));
         Ok(format!("bitcast<vec4<u32>>(aw_vi{})", arg))
     }

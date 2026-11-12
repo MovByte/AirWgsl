@@ -136,78 +136,47 @@ fn tint_check(tint: &Path, file: &Path) -> Result<(), String> {
     }
 }
 
-fn lower(module: &airwgsl::ir::Module, bitcode: &[u8], function: &str, rules: &hooks::Rules) -> Outcome {
-    let entries = match wgsl::entry::entries(module) {
-        Ok(e) => e,
-        Err(r) => return refused(&r),
+fn not_a_function(reason: &str) -> Outcome {
+    Outcome {
+        status: "not-a-function",
+        item: String::new(),
+        kind: String::new(),
+        construct: String::new(),
+        reason: reason.into(),
+        wgsl: None,
+    }
+}
+
+fn lower(decoded: &Result<airwgsl::air::AirModule, airwgsl::Refusal>, function: &str, rules: &hooks::Rules) -> Outcome {
+    let air = match decoded {
+        Ok(a) => a,
+        Err(r) => return refused(&tracked::name_item(r.clone())),
     };
+    let module = &air.ir;
     let fi = match module.function_by_name(function) {
-        Some(fi) => fi,
+        Some(fi) => fi as u32,
         // The system index also lists the data symbols of library modules: they are not functions.
         None if module.globals.iter().any(|g| g.common.name == function) => {
-            return Outcome {
-                status: "not-a-function",
-                item: String::new(),
-                kind: String::new(),
-                construct: String::new(),
-                reason: "a global variable of the module".into(),
-                wgsl: None,
-            };
+            return not_a_function("a global variable of the module");
         }
         // Library modules (archive members) are listed under their member names: they hold no entry point.
-        None if entries.is_empty() => {
-            return Outcome {
-                status: "not-a-function",
-                item: String::new(),
-                kind: String::new(),
-                construct: String::new(),
-                reason: "a library module listed under its archive member name".into(),
-                wgsl: None,
-            };
+        None if air.entry_points.is_empty() => {
+            return not_a_function("a library module listed under its archive member name");
         }
         // Binary archives name a module's one entry point differently from its IR function.
-        None if entries.len() == 1 => entries[0].function,
+        None if air.entry_points.len() == 1 => air.entry_points[0].function,
         None => return refused(&tracked::refuse("module-unreadable", function, None, "no such function")),
     };
-    let function = module.functions[fi].common.name.as_str();
-    let Some(entry) = entries.into_iter().find(|e| e.function == fi) else {
-        // Not a pipeline stage: a function linked into stages (visible, intersection, stitchable or library code).
-        let has = |n: &str| {
-            module.named_metadata.iter().any(|nm| {
-                nm.name == n
-                    && nm.ops.iter().any(|&o| match module.md(o) {
-                        airwgsl::ir::Metadata::Tuple { ops, .. } => ops.first().copied().flatten().is_some_and(|f| {
-                            matches!(module.md(f), airwgsl::ir::Metadata::Value { value: airwgsl::ir::Value::Global(airwgsl::ir::GlobalId::Function(x)), .. } if *x as usize == fi)
-                        }),
-                        _ => false,
-                    })
-            })
-        };
-        let r = if has("air.intersection") {
-            tracked::refuse_family("ray-tracing", function, None)
-        } else if has("air.visible") {
-            tracked::refuse_family("visible-stitchable", function, None)
-        } else {
-            tracked::refuse(
-                "non-canonical-input",
-                function,
-                None,
-                "a function that is not an entry point is linked into one",
-            )
-        };
-        return refused(&r);
+    let Some(entry) = air.entry_points.iter().find(|e| e.function == fi) else {
+        // Not listed by any stage: a function linked into stages (library code).
+        return refused(&tracked::refuse(
+            "non-canonical-input",
+            function,
+            None,
+            "a function that is not an entry point is linked into one",
+        ));
     };
-    let ft = match entry.stage {
-        airwgsl::MetalStage::Vertex => 1,
-        airwgsl::MetalStage::Fragment => 2,
-        _ => 3,
-    };
-    let am = airwgsl::AirModule {
-        hash: [0; 32],
-        bitcode: Arc::from(bitcode),
-        entry: Some(airwgsl::EntryPoint { function: function.to_string(), function_type: ft, constants: Vec::new() }),
-    };
-    let inp = match wgsl::input(&am) {
+    let inp = match wgsl::input_of(air.clone(), &entry.name, entry.stage.function_type()) {
         Ok(i) => i,
         Err(r) => return refused(&r),
     };
@@ -289,10 +258,25 @@ fn main() {
                 let mut lines = Vec::new();
                 match parsed {
                     Ok(Ok(module)) => {
+                        #[allow(clippy::result_large_err)]
+                        let decoded = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            airwgsl::air::AirModule::decode(module)
+                        })) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                let mut r = results.lock().unwrap();
+                                for f in &j.functions {
+                                    r.push(format!(
+                                        "{}\t{}\t{}\tcrash\t\t\t\tAIR semantic layer panic\t",
+                                        j.corpus, j.sha, f
+                                    ));
+                                }
+                                continue;
+                            }
+                        };
                         for f in &j.functions {
-                            let o = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                lower(&module, &bc, f, &rules)
-                            }));
+                            let o =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower(&decoded, f, &rules)));
                             let o = match o {
                                 Ok(o) => o,
                                 Err(p) => Outcome {

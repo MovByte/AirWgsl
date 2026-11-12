@@ -6,7 +6,8 @@
 //! no unresolved function constant and no static initializer, which is what package S3's `canonicalize` produces (plan
 //! 5.1 stage 5). Until S3 lands, a module is taken as it is read when it is already in that form (the front end
 //! inlines at `-O`), and otherwise refused with the S3-owned tracked item, so no input is lowered with a construct
-//! skipped. The entry point's records come from the module's metadata through [`entry`], the seam to package S2.
+//! skipped. The entry point comes typed from the AIR semantic layer ([`crate::air`]), and the reflection from
+//! [`crate::reflect`].
 //!
 //! # Output
 //!
@@ -26,12 +27,12 @@
 #![allow(clippy::result_large_err)]
 
 pub mod emit;
-pub mod entry;
 pub mod hooks;
 pub mod io;
 pub mod tracked;
 pub mod types;
 
+use crate::air;
 use crate::api::*;
 use crate::cfg::{self, Term};
 use crate::ir::layout::DataLayout;
@@ -39,7 +40,6 @@ use crate::ir::{GlobalId, Module, Op, Value};
 use crate::layout::Layout;
 use crate::mem::{Memory, RegionKind};
 use crate::num::{self, Rounding};
-use entry::Entry;
 use hooks::Rules;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -49,11 +49,6 @@ type R<T> = Result<T, Refusal>;
 /// The entry function's name in every generated module.
 pub const ENTRY_POINT: &str = "aw_main";
 
-/// `MTLFunctionType` values.
-const MTL_FUNCTION_VERTEX: u64 = 1;
-const MTL_FUNCTION_FRAGMENT: u64 = 2;
-const MTL_FUNCTION_KERNEL: u64 = 3;
-
 /// Compile with the registered rules ([`hooks::registered`]) and the exact rounding policy.
 pub fn compile(stage_modules: &[AirModule], desc: &PipelineDesc, host: &HostCaps) -> R<Compiled> {
     compile_with(stage_modules, desc, host, &hooks::registered(), &Rounding::SoftFloat)
@@ -61,8 +56,11 @@ pub fn compile(stage_modules: &[AirModule], desc: &PipelineDesc, host: &HostCaps
 
 /// A module and its entry, read and checked.
 pub struct Input {
-    pub module: Module,
-    pub entry: Entry,
+    /// The decoded module (its IR in `module.ir`).
+    pub module: air::AirModule,
+    pub entry: air::EntryPoint,
+    /// The entry's stage.
+    pub stage: MetalStage,
     pub dl: DataLayout,
 }
 
@@ -70,41 +68,62 @@ fn unreadable(detail: String) -> Refusal {
     tracked::refuse("module-unreadable", "module", None, detail)
 }
 
+/// The Metal stage of an entry point lowered as a pipeline stage; other entry points are linked into stages.
+fn metal_stage(e: &air::EntryPoint) -> R<MetalStage> {
+    let loc = Some(Location { function: e.name.clone(), instruction: None });
+    Ok(match e.stage {
+        air::Stage::Vertex => MetalStage::Vertex,
+        air::Stage::Fragment => MetalStage::Fragment,
+        air::Stage::Kernel => MetalStage::Kernel,
+        air::Stage::Visible => return Err(tracked::refuse_family("visible-stitchable", e.name.clone(), loc)),
+        air::Stage::Intersection => return Err(tracked::refuse_family("ray-tracing", e.name.clone(), loc)),
+        air::Stage::Mesh | air::Stage::Object => {
+            return Err(tracked::refuse_family("mesh-object", e.name.clone(), loc));
+        }
+    })
+}
+
+/// Check a decoded module's entry for `function` and make it an input.
+pub fn input_of(module: air::AirModule, function: &str, function_type: u64) -> R<Input> {
+    let entry = module.entry_point(function).cloned().ok_or_else(|| {
+        tracked::refuse(
+            "entry-metadata",
+            function.to_string(),
+            None,
+            "the function is not an entry point of the module",
+        )
+    })?;
+    if function_type != entry.stage.function_type() {
+        return Err(tracked::refuse(
+            "entry-metadata",
+            function.to_string(),
+            None,
+            "the function type does not match its record",
+        ));
+    }
+    let stage = metal_stage(&entry)?;
+    let dl = DataLayout::parse(&module.ir.datalayout).map_err(unreadable)?;
+    Ok(Input { module, entry, stage, dl })
+}
+
 /// Read a stage's module and find its entry.
 pub fn input(m: &AirModule) -> R<Input> {
     let ep = m.entry.as_ref().ok_or_else(|| {
         tracked::refuse("non-canonical-input", "module", None, "a linked module (linking is canonicalization's)")
     })?;
-    let module = crate::parse_bitcode(&m.bitcode).map_err(|e| unreadable(e.to_string()))?;
-    let entries = entry::entries(&module)?;
-    let fi = module.function_by_name(&ep.function).ok_or_else(|| unreadable(format!("no function {}", ep.function)))?;
-    let entry = entries.into_iter().find(|e| e.function == fi).ok_or_else(|| {
-        tracked::refuse("entry-metadata", ep.function.clone(), None, "the function is not an entry point of the module")
-    })?;
-    let expected = match entry.stage {
-        MetalStage::Vertex => MTL_FUNCTION_VERTEX,
-        MetalStage::Fragment => MTL_FUNCTION_FRAGMENT,
-        _ => MTL_FUNCTION_KERNEL,
-    };
-    if ep.function_type != expected {
-        return Err(tracked::refuse(
-            "entry-metadata",
-            ep.function.clone(),
-            None,
-            "the function type does not match its record",
-        ));
-    }
     if !ep.constants.is_empty() {
         return Err(tracked::refuse_family("function-constants", ep.function.clone(), None));
     }
-    let dl = DataLayout::parse(&module.datalayout).map_err(unreadable)?;
-    Ok(Input { module, entry, dl })
+    let ir = crate::parse_bitcode(&m.bitcode).map_err(|e| unreadable(e.to_string()))?;
+    let module = air::AirModule::decode(ir).map_err(tracked::name_item)?;
+    input_of(module, &ep.function, ep.function_type)
 }
 
 /// Refuse a function that is not in canonical form.
-fn check_canonical(m: &Module, fi: usize) -> R<()> {
+fn check_canonical(m: &Module, fi: usize, function_constants: &[air::FunctionConstant]) -> R<()> {
     let f = &m.functions[fi];
     let loc = || Some(Location { function: f.common.name.clone(), instruction: None });
+    let constants: BTreeSet<u32> = function_constants.iter().map(|c| c.global).collect();
     // A constructor list with entries runs static initializers before the entry point; an empty one (which the front
     // end emits for every module of some libraries) does nothing.
     if m.globals.iter().any(|g| {
@@ -127,7 +146,10 @@ fn check_canonical(m: &Module, fi: usize) -> R<()> {
         for v in inst.op.operands() {
             if let Value::Global(GlobalId::Var(g)) = v {
                 let gv = &m.globals[g as usize];
-                if gv.section.as_deref() == Some("air.fc_initializer") || gv.externally_initialized {
+                if constants.contains(&g)
+                    || gv.section.as_deref() == Some("air.fc_initializer")
+                    || gv.externally_initialized
+                {
                     return Err(tracked::refuse_family("function-constants", gv.common.name.clone(), loc()));
                 }
             }
@@ -251,12 +273,12 @@ pub fn lower_stage(
     varyings: &io::Varyings,
     layout: &mut Layout,
 ) -> R<LoweredStage> {
-    let m = &inp.module;
-    let fi = inp.entry.function;
-    let stage = inp.entry.stage;
+    let m = &inp.module.ir;
+    let fi = inp.entry.function as usize;
+    let stage = inp.stage;
     let fname = m.functions[fi].common.name.clone();
     let loc = || Some(Location { function: fname.clone(), instruction: None });
-    check_canonical(m, fi)?;
+    check_canonical(m, fi, &inp.module.function_constants)?;
     let terms = terms(m, fi)?;
     let (analysis, structured) = cfg::structure(&terms).map_err(|e| match e {
         cfg::Error::Irreducible { from, to } => tracked::refuse(
@@ -274,13 +296,13 @@ pub fn lower_stage(
     })?;
     let bindings = desc.bindings.iter().find(|b| b.stage == stage);
     let used = used_args(m, fi);
-    let icx = io::Ctx { m, entry: &inp.entry, desc, host, bindings, varyings, used: &used, rules };
+    let icx = io::Ctx { m, entry: &inp.entry, stage, desc, host, bindings, varyings, used: &used, rules };
     let iface = io::lower(&icx, layout)?;
     let shared_device = stage != MetalStage::Vertex;
     let mem = Memory::analyze(m, fi, &inp.dl, &iface.regions, shared_device)?;
     let target = num::Target { rounding, host };
     let mut e = emit::FnEmit::new(m, fi, &inp.dl, mem, &analysis, rules, target, &iface, stage);
-    e.records = inp.entry.args.clone();
+    e.records = inp.entry.arguments.clone();
     e.prepare()?;
     if iface.early_fragment_tests
         && e.mem.regions.iter().any(|r| r.written && matches!(r.kind, RegionKind::Buffer { .. }))
@@ -440,7 +462,7 @@ pub fn compile_with(
     for m in stage_modules {
         inputs.push(input(m)?);
     }
-    let by = |s: MetalStage| inputs.iter().filter(|i| i.entry.stage == s).collect::<Vec<_>>();
+    let by = |s: MetalStage| inputs.iter().filter(|i| i.stage == s).collect::<Vec<_>>();
     let order: Vec<&Input> = match &desc.kind {
         PipelineKind::Compute(_) => {
             let k = by(MetalStage::Kernel);
@@ -474,8 +496,8 @@ pub fn compile_with(
         }
         PipelineKind::Tile(_) => return Err(tracked::refuse_family("imageblock-tile", "tile pipeline", None)),
     };
-    let vin = order.iter().find(|i| i.entry.stage == MetalStage::Vertex).map(|i| (&i.module, &i.entry));
-    let fin = order.iter().find(|i| i.entry.stage == MetalStage::Fragment).map(|i| (&i.module, &i.entry));
+    let vin = order.iter().find(|i| i.stage == MetalStage::Vertex).map(|i| (&i.module.ir, &i.entry));
+    let fin = order.iter().find(|i| i.stage == MetalStage::Fragment).map(|i| (&i.module.ir, &i.entry));
     let varyings = if vin.is_some() || fin.is_some() { io::varyings(vin, fin)? } else { Default::default() };
     let mut layout = Layout::new();
     let mut stages = Vec::new();
@@ -517,21 +539,31 @@ pub fn compile_with(
             source: finish_source(s, &layout),
         })
         .collect();
-    // Reflection is built from the AIR metadata by package S2 (src/reflect); until it lands, each stage carries its
-    // function type only.
-    let reflection = Reflection {
-        stages: order
-            .iter()
-            .map(|i| StageReflection {
-                function_type: match i.entry.stage {
-                    MetalStage::Vertex => MTL_FUNCTION_VERTEX,
-                    MetalStage::Fragment => MTL_FUNCTION_FRAGMENT,
-                    _ => MTL_FUNCTION_KERNEL,
-                },
-                ..Default::default()
-            })
-            .collect(),
-    };
+    // Reflection from the AIR metadata (package S2): the arguments the canonical function does not use are reported
+    // inactive, as real Metal reports them after its own optimization.
+    let mut stages_reflection = Vec::new();
+    for i in &order {
+        let fi = i.entry.function as usize;
+        let used = used_args(&i.module.ir, fi);
+        let inputs = crate::reflect::Inputs {
+            unused_arguments: used.iter().enumerate().filter(|(_, u)| !**u).map(|(k, _)| k as u32).collect(),
+            ..Default::default()
+        };
+        let stage_input = match (&desc.kind, i.stage) {
+            (PipelineKind::Render(r), MetalStage::Vertex) => match &r.vertex_descriptor {
+                Some(vd) => crate::reflect::StageInput::Vertex(vd),
+                None => crate::reflect::StageInput::None,
+            },
+            (PipelineKind::Compute(c), MetalStage::Kernel) => match &c.stage_input {
+                Some(si) => crate::reflect::StageInput::Compute(si),
+                None => crate::reflect::StageInput::None,
+            },
+            _ => crate::reflect::StageInput::None,
+        };
+        stages_reflection
+            .push(crate::reflect::stage(&i.module, &i.entry, &inputs, stage_input).map_err(tracked::name_item)?);
+    }
+    let reflection = Reflection { stages: stages_reflection };
     Ok(Compiled { wgsl, layout: layout.binding_layout(), passes: vec![PassPlan::Direct], reflection, requirements })
 }
 
@@ -544,7 +576,7 @@ pub fn compile_entry(
     threads: [u64; 3],
     tg_lengths: &[u64],
 ) -> R<(String, HostRequirements)> {
-    let desc = match inp.entry.stage {
+    let desc = match inp.stage {
         MetalStage::Kernel => PipelineDesc {
             kind: PipelineKind::Compute(ComputeState {
                 threads_per_threadgroup: threads,
@@ -572,8 +604,8 @@ pub fn compile_entry(
             bindings: Vec::new(),
         },
     };
-    let pair = Some((&inp.module, &inp.entry));
-    let varyings = match inp.entry.stage {
+    let pair = Some((&inp.module.ir, &inp.entry));
+    let varyings = match inp.stage {
         MetalStage::Vertex => io::varyings(pair, None)?,
         MetalStage::Fragment => io::varyings(None, pair)?,
         _ => Default::default(),

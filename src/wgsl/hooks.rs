@@ -16,10 +16,10 @@
 //! Registration is static: a package adds its rule set to [`registered`]. [`crate::wgsl::compile_with`] takes an
 //! explicit set (tests register their own).
 
+use crate::air::{Argument, Output};
 use crate::api::{BindingResource, BindingSource, MetalStage, PipelineDesc, Refusal, UniformValue};
 use crate::ir::{InstId, Module, TypeId, Value};
 use crate::mem::access::Ptr;
-use crate::wgsl::entry::Record;
 
 /// How a call accesses memory through one of its pointer operands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +74,8 @@ pub trait RuleCx {
         source: BindingSource,
         wgsl_type: &str,
     ) -> Result<String, Refusal>;
-    /// The entry-point record of an IR argument (texture type, access, sampler state, ...).
-    fn arg_record(&self, arg: u32) -> Option<Record>;
+    /// The entry point's record of an IR argument (texture location and access, sampler, ...).
+    fn arg_record(&self, arg: u32) -> Option<Argument>;
     /// A WebGPU feature the code needs.
     fn require_feature(&mut self, feature: &str);
     /// A WGSL `enable` directive the code needs.
@@ -137,12 +137,13 @@ pub struct OutputField {
 
 /// A rule lowering entry-point argument and output records (the stage-interface lowering).
 pub trait StageRule: Send + Sync {
-    /// Whether the rule lowers argument records of this kind in this stage.
+    /// Whether the rule lowers argument records of this kind (the record key of the role, [`super::io::role_key`])
+    /// in this stage.
     fn handles_argument(&self, _stage: MetalStage, _kind: &str) -> bool {
         false
     }
     /// Lower argument `arg` (record `record`): the WGSL expression of its value in its type's carrier.
-    fn argument(&self, _cx: &mut dyn StageCx, _arg: u32, _record: &Record) -> Result<String, Refusal> {
+    fn argument(&self, _cx: &mut dyn StageCx, _arg: u32, _record: &Argument) -> Result<String, Refusal> {
         unreachable!("argument() of a rule that handles no argument")
     }
     /// Whether the rule lowers output records of this kind in this stage.
@@ -155,7 +156,7 @@ pub trait StageRule: Send + Sync {
         &self,
         _cx: &mut dyn StageCx,
         _index: usize,
-        _record: &Record,
+        _record: &Output,
         _ty: TypeId,
     ) -> Result<Option<OutputField>, Refusal> {
         unreachable!("output() of a rule that handles no output")

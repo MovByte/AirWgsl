@@ -67,7 +67,7 @@ pub struct FnEmit<'a> {
     /// Derivatives are lowered (the module disables the derivative uniformity diagnostic, see [`super`]).
     pub derivatives: bool,
     /// The entry point's argument records.
-    pub records: Vec<Option<super::entry::Record>>,
+    pub records: Vec<crate::air::Argument>,
     /// Bindings rules asked for: (name, WGSL type, resource, source).
     pub resources: Vec<(String, String, crate::api::BindingResource, crate::api::BindingSource)>,
 }
@@ -1999,8 +1999,8 @@ impl RuleCx for FnEmit<'_> {
         Ok(name)
     }
 
-    fn arg_record(&self, arg: u32) -> Option<super::entry::Record> {
-        self.records.get(arg as usize).cloned().flatten()
+    fn arg_record(&self, arg: u32) -> Option<crate::air::Argument> {
+        self.records.iter().find(|a| a.position == arg).cloned()
     }
 
     fn require_feature(&mut self, feature: &str) {
