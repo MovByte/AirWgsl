@@ -155,6 +155,11 @@ fn unresolved(cx: &Ctx, what: &str, detail: &str) -> Refusal {
     r
 }
 
+/// A vertex function without a position output.
+fn no_position(m: &Module, fi: usize) -> Refusal {
+    tracked::refuse("vertex-position", "air.position", loc(m, fi), "the vertex function has no position output")
+}
+
 fn loc(m: &Module, fi: usize) -> Option<Location> {
     Some(Location { function: m.functions[fi].common.name.clone(), instruction: None })
 }
@@ -783,6 +788,9 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
         if !e.outputs.is_empty() {
             return Err(tracked::refuse("entry-metadata", "outputs", loc(m, fi), "output records for a void function"));
         }
+        if cx.stage == MetalStage::Vertex {
+            return Err(no_position(m, fi));
+        }
         return Ok(());
     }
     let (members, is_struct) = ret_members(m, fi);
@@ -946,6 +954,11 @@ fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refu
                 });
             }
         }
+    }
+    // WGSL 11.4: a vertex shader must return the position built-in output value. A Metal vertex function has none
+    // when it returns void or its position output's function-constant predicate is false.
+    if cx.stage == MetalStage::Vertex && !fields.iter().any(|f| f.contains("@builtin(position)")) {
+        return Err(no_position(m, fi));
     }
     if fields.is_empty() {
         // Every output is unread: the stage returns nothing.

@@ -534,6 +534,14 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.4",
     },
     Item {
+        id: "vertex-position",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a vertex function without a position output (it returns void, or a false function-constant \
+                  predicate removes its position): a WGSL vertex shader must return the position built-in",
+        reference: "WGSL 11.4",
+    },
+    Item {
         id: "call-cycle",
         owner: None,
         kind: RefusalKind::NoExactLowering,
