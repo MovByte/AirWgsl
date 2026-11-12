@@ -7,5 +7,6 @@
 pub mod api;
 pub mod num;
 pub mod bitstream;
+pub mod ir;
 
 pub use api::*;
