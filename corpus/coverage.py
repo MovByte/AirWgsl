@@ -23,8 +23,12 @@ Inputs:
 ``--d2``
     Package D2's ``tables/intrinsics.toml`` (default: ``../tables/intrinsics.toml`` next to
     this directory). When it exists, its function families are the primary view and the
-    derived list is the secondary view; when it does not, the derived list is the only view. A
-    table that exists but does not have D2's ``[[family]]``/``[[name]]`` shape is an error.
+    derived list is the secondary view; when it does not, the derived list is the only view.
+    Names are classified by D2's grammar, ``tables/gen/airgrammar.py`` of this repository:
+    a called ``air.*`` function by ``Grammar.function`` (the target's table function, its type
+    tokens, the family), a metadata name by ``Grammar.name``. A table without D2's
+    ``[grammar]``, ``[[domain]]``, ``[[family]]``, ``[[function]]`` and ``[[name]]`` shape is
+    an error.
 ``--target-headers``
     The target's MSL standard library headers. Every ``__metal_*`` function they call must be
     claimed by an accepted variant that emits AIR.
@@ -39,11 +43,13 @@ dimension, type signature and modifiers. Per family the report gives:
 ``system``
     Variants the system corpus uses, and how many of them the generated corpus contains.
 ``listed``
-    For the D2 view: names D2 lists for the family, by D2's source tags, and how many the
-    generated corpus contains. For the derived view: target compiler strings in the family.
+    For the D2 view: the functions of the target's AIR tables that D2 files under the family,
+    tagged by whether the system corpus calls them, and how many of them the generated corpus
+    calls (with any type tokens). For the derived view: target compiler strings in the family.
 
-Names the generated corpus contains that D2's closed table does not list are reported: under
-D2's grammar the translator would refuse them.
+Generated and system names D2's grammar refuses are reported: the translator would refuse
+them. System and generated metadata names that are not D2 ``[[name]]`` rows are reported
+the same way.
 
 Writes ``OUT_DIR/coverage.json`` (complete data) and ``OUT_DIR/coverage.md`` (summary and every
 uncovered item).
@@ -55,6 +61,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tomllib
 
 from airnames import decompose
@@ -66,23 +73,29 @@ def load_json(path):
 
 
 def load_d2(path):
+    """D2's grammar over the table at path, its function families and the table's sha256."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tables", "gen"))
+    import airgrammar
     with open(path, "rb") as fh:
         raw = fh.read()
     data = tomllib.loads(raw.decode("utf-8"))
-    if not isinstance(data.get("family"), list) or not isinstance(data.get("name"), list):
-        raise SystemExit(f"error: {path} has no [[family]] and [[name]] arrays; the reader must be updated")
+    for key, kind in (("grammar", dict), ("domain", list), ("family", list), ("function", list), ("name", list)):
+        if not isinstance(data.get(key), kind):
+            raise SystemExit(f"error: {path} has no {key} of D2's grammar; the reader must be updated")
+    grammar = airgrammar.Grammar(data)
     families = {}
     for f in data["family"]:
-        if "id" not in f or "match" not in f:
-            raise SystemExit(f"error: {path}: family row without id or match: {f}")
-        families[f["id"]] = {"kind": f.get("kind", ""), "decision": f.get("decision", ""),
-                             "match": [re.compile(m) for m in f["match"]]}
-    names = {}
-    for n in data["name"]:
-        if n.get("family") not in families:
-            raise SystemExit(f"error: {path}: name {n.get('name')} names unknown family {n.get('family')}")
-        names[n["name"]] = (n["family"], tuple(n.get("sources", ())))
-    return families, names, hashlib.sha256(raw).hexdigest()
+        if "id" not in f or "decision" not in f:
+            raise SystemExit(f"error: {path}: family row without id or decision: {f}")
+        families[f["id"]] = {"decision": f["decision"], "functions": f.get("functions", 0)}
+    # Families a called function can belong to: those with stems, and the families type
+    # tokens reclassify names to.
+    function_ids = [f["id"] for f in data["family"] if f.get("functions")]
+    for d in data["domain"]:
+        for _, target in d.get("reclassify", []):
+            if target not in function_ids:
+                function_ids.append(target)
+    return grammar, airgrammar.Refused, families, function_ids, data["function"], hashlib.sha256(raw).hexdigest()
 
 
 def variant_label(name, with_op):
@@ -101,8 +114,9 @@ def header_builtins(directory):
     return calls
 
 
-def view(family_ids, members, listed, gen_versions, sys_names, order, with_op):
-    """Coverage of one family list. ``listed`` maps family -> {name: source tags}."""
+def view(family_ids, members, listed, gen_versions, sys_names, order, with_op, covered_listed=None):
+    """Coverage of one family list. ``listed`` maps family -> {name: source tags}; a listed name
+    is covered when ``covered_listed(name)`` holds (default: the generated corpus contains it)."""
     gen_names = set(gen_versions)
     per = {f: {"accepted": {}, "system": {}, "listed": {}} for f in family_ids}
     outside = {"generated": [], "system": []}
@@ -128,7 +142,7 @@ def view(family_ids, members, listed, gen_versions, sys_names, order, with_op):
             e = per[f]["listed"].setdefault(variant_label(n, with_op), {"names": [], "tags": set(), "covered": False})
             e["names"].append(n)
             e["tags"] |= set(tags)
-            e["covered"] = e["covered"] or n in gen_names
+            e["covered"] = e["covered"] or (covered_listed(n) if covered_listed else n in gen_names)
     summary = []
     for f in family_ids:
         p = per[f]
@@ -218,23 +232,46 @@ def main():
     views["derived"] = {"source": f"derived list: {fam['method']}",
                         "result": view(derived_ids, derived_members, derived_listed, gen_versions, sys_names, order, False)}
 
-    d2_unlisted = None
+    d2_refused = None
     if os.path.exists(args.d2):
-        families, names, sha = load_d2(args.d2)
-        function_ids = [f for f, info in families.items() if info["kind"] == "function"]
+        grammar, refused_error, families, function_ids, functions, sha = load_d2(args.d2)
 
         def d2_members(name):
-            if name in names:
-                return [names[name][0]] if names[name][0] in function_ids else []
-            return [f for f in function_ids if any(p.fullmatch(name) for p in families[f]["match"])]
+            try:
+                return [grammar.function(name)[2]]
+            except refused_error:
+                return []
 
+        # Listed: the functions of the latest AIR table (the generated corpus's version).
+        latest = set(grammar.tables[grammar.versions[-1]])
         d2_listed = collections.defaultdict(dict)
-        for n, (f, tags) in names.items():
-            if f in function_ids:
-                d2_listed[f][n] = tags
-        views["d2"] = {"source": f"D2 table {args.d2} (sha256 {sha})", "families": families,
-                       "result": view(function_ids, d2_members, d2_listed, gen_versions, sys_names, order, True)}
-        d2_unlisted = sorted(n for n in gen_names if n not in names)
+        for r in functions:
+            if r["name"] in latest:
+                d2_listed[r["family"]][r["name"]] = ("system-called" if r.get("system") else "not-system-called",)
+        # A stem counts as covered when the generated corpus calls it with any type tokens.
+        gen_stems = {}
+        for n in gen_versions:
+            try:
+                gen_stems.setdefault(grammar.function(n)[0], set()).add(n)
+            except refused_error:
+                pass
+        views["d2"] = {"source": f"D2 table {args.d2} (sha256 {sha}), classified by D2's grammar", "families": families,
+                       "result": view(function_ids, d2_members, d2_listed, gen_versions, sys_names, order, True,
+                                      covered_listed=lambda stem: stem in gen_stems)}
+        d2_refused = {"generated": [], "system": [], "system_metadata": [], "generated_metadata": []}
+        for key, names in (("generated", gen_versions), ("system", sys_names)):
+            for n in sorted(names):
+                try:
+                    grammar.function(n)
+                except refused_error as e:
+                    d2_refused[key].append([n, str(e)])
+        for key, names in (("system_metadata", list(system["metadata_strings"]) + [n for n in system["named_metadata"] if n.startswith("air.")]),
+                           ("generated_metadata", list(generated["metadata_strings"]) + [n for n in generated["named_metadata"] if n.startswith("air.")])):
+            for n in sorted(set(names)):
+                try:
+                    grammar.name(n)
+                except refused_error as e:
+                    d2_refused[key].append([n, str(e)])
     primary = "d2" if "d2" in views else "derived"
 
     header_report = None
@@ -275,7 +312,7 @@ def main():
         "system_names_uncovered": {n: m for n, m in sorted(sys_names.items()) if n not in gen_names},
         "views": {k: {"source": v["source"], "totals": totals(v["result"][0]), "families": v["result"][0],
                       "detail": v["result"][1], "outside": v["result"][2]} for k, v in views.items()},
-        "generated_names_not_in_d2": d2_unlisted,
+        "names_refused_by_d2": d2_refused,
         "metadata_strings_system": len(sys_meta), "metadata_strings_system_covered": len(sys_meta & gen_meta),
         "metadata_strings_uncovered": sorted(sys_meta - gen_meta),
         "llvm_intrinsics_system": sum(1 for n in sys_other if n.startswith("llvm.")),
@@ -296,8 +333,11 @@ def main():
              f"- System `air.*` names also emitted: {out['system_names_covered']} / {len(sys_names)}",
              f"- System metadata strings also in the generated corpus: {out['metadata_strings_system_covered']} / {len(sys_meta)}",
              f"- System `llvm.*` intrinsics also in the generated corpus: {out['llvm_intrinsics_system_covered']} / {out['llvm_intrinsics_system']}"]
-    if d2_unlisted is not None:
-        lines.append(f"- Generated `air.*` names absent from D2's closed name list: {len(d2_unlisted)}")
+    if d2_refused is not None:
+        lines.append(f"- Generated `air.*` functions D2's grammar refuses: {len(d2_refused['generated'])}; "
+                     f"system: {len(d2_refused['system'])}")
+        lines.append(f"- Metadata names that are not D2 names: system {len(d2_refused['system_metadata'])}, "
+                     f"generated {len(d2_refused['generated_metadata'])}")
     for key in ([primary] + [k for k in views if k != primary]):
         v = out["views"][key]
         t = v["totals"]
@@ -328,9 +368,11 @@ def main():
     lines += ["", "## System `air.*` names the generated corpus does not emit", ""]
     for n, m in out["system_names_uncovered"].items():
         lines.append(f"- `{n}` ({m} modules)")
-    if d2_unlisted:
-        lines += ["", "## Generated names D2's closed list does not contain", ""]
-        lines.append(", ".join(f"`{n}`" for n in d2_unlisted))
+    if d2_refused and any(d2_refused.values()):
+        lines += ["", "## Names D2's grammar refuses", ""]
+        for key, items in d2_refused.items():
+            for n, why in items:
+                lines.append(f"- {key}: `{n}`: {why}")
     lines += ["", "## System metadata strings not in the generated corpus", ""]
     lines.append(", ".join(f"`{m}`" for m in out["metadata_strings_uncovered"]) or "(none)")
     lines += ["", "## System `llvm.*` intrinsics not in the generated corpus", ""]
