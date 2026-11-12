@@ -11,7 +11,7 @@
 //!
 //! - A value whose `MTLDataType` differs from the constant's type is an error (`MTLLibraryErrorCompileFailure`:
 //!   "constant fc_i (0) is of type MTLDataTypeInt but value found has type MTLDataTypeUInt"), with no conversion
-//!   between types of the same size. This is [`RefusalKind::RejectedByDevice`].
+//!   between types of the same size: the tracked item `compiler:function-constant-type`, rejected by the device.
 //! - A constant the function uses without a value is not an error: the specialized code computes with `undef` (a
 //!   store of it is deleted), which is what the unchanged initializer gives here.
 //! - A `bool` constant set to a byte other than 0 or 1 is read as `true` by a scalar `bool` and by its lowest bit in
@@ -26,14 +26,13 @@
 
 use std::collections::HashSet;
 
-use crate::api::Refusal;
-use crate::api::{FunctionConstant, RefusalKind};
+use crate::api::{FunctionConstant, Refusal};
 use crate::interp::memory::{Byte, Layout};
 use crate::ir::layout::DataLayout;
 use crate::ir::{ConstKind, GlobalId, Metadata, Module, Op, Type, Value};
 
 use super::util::{i1_const, remove_inst, replace_uses};
-use super::{refusal, refusal_at, values};
+use super::{Item, refusal, refusal_at, values};
 
 /// One `!air.function_constants` record.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,8 +115,7 @@ pub fn specialize(
     recs: &[ConstantRecord],
     constants: &[FunctionConstant],
 ) -> Result<HashSet<String>, Refusal> {
-    let dl =
-        DataLayout::parse(&m.datalayout).map_err(|e| refusal(RefusalKind::RejectedByDevice, "datalayout", "", &e))?;
+    let dl = DataLayout::parse(&m.datalayout).map_err(|e| refusal(Item::ModuleUnreadable, "datalayout", "", &e))?;
     let mut defined = HashSet::new();
     for r in recs {
         let value = constants
@@ -130,7 +128,7 @@ pub fn specialize(
         let Some(c) = value else { continue };
         let want = data_type(&r.type_name).ok_or_else(|| {
             refusal(
-                RefusalKind::NotImplemented,
+                Item::FunctionConstants,
                 &format!("function constant {} of type {}", r.name, r.type_name),
                 "",
                 "an MSL type the specialization does not know",
@@ -138,7 +136,7 @@ pub fn specialize(
         })?;
         if c.data_type != want {
             return Err(refusal(
-                RefusalKind::RejectedByDevice,
+                Item::FunctionConstantType,
                 &format!("function constant {} ({})", r.name, r.index),
                 "",
                 &format!("the constant is of MTLDataType {} but the value has MTLDataType {}", want, c.data_type),
@@ -149,7 +147,7 @@ pub fn specialize(
         let size = layout.store_size(ty).unwrap_or(0) as usize;
         if c.value.len() < size {
             return Err(refusal(
-                RefusalKind::RejectedByDevice,
+                Item::FunctionConstantType,
                 &format!("function constant {} ({})", r.name, r.index),
                 "",
                 &format!("the value has {} bytes; the constant's type stores {}", c.value.len(), size),
@@ -161,17 +159,16 @@ pub fn specialize(
             && c.value[..size].iter().any(|&b| b > 1)
         {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::FunctionConstantBool,
                 &format!("function constant {} ({})", r.name, r.index),
                 "",
                 "a bool value with a byte other than 0 or 1, which Metal resolves inconsistently",
             ));
         }
         let bytes: Vec<Byte> = c.value[..size].iter().map(|&b| Byte::data(b)).collect();
-        let v = layout.decode(ty, &bytes).map_err(|e| refusal(RefusalKind::NotImplemented, &gname, "", &e))?;
+        let v = layout.decode(ty, &bytes).map_err(|e| refusal(Item::FunctionConstants, &gname, "", &e))?;
         let mem = crate::interp::Memory::new();
-        let init =
-            values::to_const(m, &mem, ty, &v).map_err(|e| refusal(RefusalKind::NotImplemented, &gname, "", &e))?;
+        let init = values::to_const(m, &mem, ty, &v).map_err(|e| refusal(Item::FunctionConstants, &gname, "", &e))?;
         m.globals[g].initializer = Some(init);
         defined.insert(gname);
     }
@@ -194,7 +191,7 @@ pub fn specialize(
                         m,
                         f,
                         i,
-                        RefusalKind::NotImplemented,
+                        Item::FunctionConstants,
                         "air.is_function_constant_defined",
                         "its operand is not a function constant global",
                     ));

@@ -11,13 +11,13 @@
 //! can change, which no measured module does: refused. So is a constructor the interpreter cannot evaluate
 //! exactly, and a function in section `air.static_init` that `llvm.global_ctors` does not list.
 
-use crate::api::{Refusal, RefusalKind};
+use crate::api::Refusal;
 use crate::interp::memory::Layout;
 use crate::interp::{self, Memory, Options};
 use crate::ir::layout::DataLayout;
 use crate::ir::{ConstKind, GlobalId, Module, Value};
 
-use super::{refusal, values};
+use super::{Item, refusal, values};
 
 /// The constructors `llvm.global_ctors` lists, in the order they run.
 pub fn constructors(m: &Module) -> Vec<usize> {
@@ -44,7 +44,7 @@ pub fn run(m: &mut Module) -> Result<(), Refusal> {
     for (i, f) in m.functions.iter().enumerate() {
         if f.section.as_deref() == Some("air.static_init") && !f.is_declaration() && !ctors.contains(&i) {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::StaticInit,
                 "air.static_init",
                 &f.common.name,
                 "a static initializer that llvm.global_ctors does not list",
@@ -70,15 +70,14 @@ pub fn run(m: &mut Module) -> Result<(), Refusal> {
     for &f in &ctors {
         if let Err(e) = interp::run(m, f, &[], &mut mem, &opts) {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::StaticInit,
                 "air.static_init",
                 &m.functions[f].common.name,
                 &format!("the static initializer cannot be evaluated at compile time: {}", e),
             ));
         }
     }
-    let dl =
-        DataLayout::parse(&m.datalayout).map_err(|e| refusal(RefusalKind::RejectedByDevice, "datalayout", "", &e))?;
+    let dl = DataLayout::parse(&m.datalayout).map_err(|e| refusal(Item::ModuleUnreadable, "datalayout", "", &e))?;
     for (g, r, initial) in before {
         if mem.region(r).bytes == initial {
             // Unchanged. With no write to the constant address space outside the constructors, the global keeps
@@ -93,7 +92,7 @@ pub fn run(m: &mut Module) -> Result<(), Refusal> {
         let ty = gv.value_type;
         if gv.common.addrspace != 2 {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::StaticInit,
                 &format!("global @{}", gv.common.name),
                 "air.static_init",
                 "a static initializer writes a global outside the constant address space",
@@ -102,10 +101,10 @@ pub fn run(m: &mut Module) -> Result<(), Refusal> {
         let layout = Layout { dl: &dl, types: &m.types };
         let size = layout.store_size(ty).unwrap_or(0) as usize;
         let now = mem.region(r).bytes[..size].to_vec();
-        let v = layout.decode(ty, &now).map_err(|e| refusal(RefusalKind::NotImplemented, "air.static_init", "", &e))?;
+        let v = layout.decode(ty, &now).map_err(|e| refusal(Item::StaticInit, "air.static_init", "", &e))?;
         let name = gv.common.name.clone();
         let init = values::to_const(m, &mem, ty, &v)
-            .map_err(|e| refusal(RefusalKind::NotImplemented, &format!("global @{}", name), "air.static_init", &e))?;
+            .map_err(|e| refusal(Item::StaticInit, &format!("global @{}", name), "air.static_init", &e))?;
         let gv = &mut m.globals[g as usize];
         gv.initializer = Some(init);
         gv.constant = true;

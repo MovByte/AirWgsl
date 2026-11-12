@@ -533,6 +533,36 @@ pub const ITEMS: &[Item] = &[
         summary: "a threadgroup buffer argument without a setThreadgroupMemoryLength:atIndex: length",
         reference: "plan 5.4",
     },
+    Item {
+        id: "call-cycle",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a call cycle (recursion): MSL forbids it and WGSL cannot express it, so inlining cannot end",
+        reference: "plan 5.1 stage 5",
+    },
+    Item {
+        id: "function-constant-type",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a function constant value whose MTLDataType or size differs from the constant's (Metal refuses it \
+                  with MTLLibraryErrorCompileFailure)",
+        reference: "plan 5.1 stage 5; measured, tests/canon/data/function-constants.txt",
+    },
+    Item {
+        id: "function-constant-bool-value",
+        owner: None,
+        kind: RefusalKind::NotImplemented,
+        summary: "a bool function constant value with a byte other than 0 or 1, which Metal reads as true in a scalar \
+                  and by its lowest bit in a vector",
+        reference: "plan 5.1 stage 5; measured, tests/canon/data/function-constants.txt",
+    },
+    Item {
+        id: "linked-module",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a linked module whose data layout differs from the stage module's",
+        reference: "plan 5.1 stage 5",
+    },
 ];
 
 /// The compiler item `id`. Panics on an unknown id: callers name items of [`ITEMS`] literally.

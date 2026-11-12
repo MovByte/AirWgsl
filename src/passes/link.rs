@@ -8,11 +8,11 @@
 //! be resolved, so definitions brought in may bring in more. Modules with a data layout other than the stage
 //! module's are refused.
 
-use crate::api::{Refusal, RefusalKind};
+use crate::api::Refusal;
 use crate::ir::{GlobalId, Linkage, Module};
 
 use super::copy::{Copier, Reach};
-use super::refusal;
+use super::{Item, refusal};
 
 /// The stage module with the definitions it needs from `libraries`.
 #[allow(clippy::result_large_err)]
@@ -22,12 +22,7 @@ pub fn link(stage: &Module, libraries: &[Module], entry: &str) -> Result<Module,
         return Ok(m);
     }
     if libraries.iter().any(|l| l.datalayout != stage.datalayout) {
-        return Err(refusal(
-            RefusalKind::RejectedByDevice,
-            "linked module",
-            entry,
-            "a linked module has a different data layout",
-        ));
+        return Err(refusal(Item::LinkedModule, "linked module", entry, "a linked module has a different data layout"));
     }
     loop {
         let mut progress = false;

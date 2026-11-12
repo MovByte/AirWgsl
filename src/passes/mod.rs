@@ -127,7 +127,7 @@ pub fn canonicalize_air(
     constants: &[FunctionConstant],
 ) -> Result<Canonical, Refusal> {
     let Some(first) = modules.first() else {
-        return Err(refusal(RefusalKind::RejectedByDevice, "pipeline", &entry.name, "no modules"));
+        return Err(refusal(Item::ModuleUnreadable, "pipeline", &entry.name, "no modules"));
     };
     let records: Vec<specialize::ConstantRecord> = first
         .function_constants
@@ -151,13 +151,13 @@ fn canonicalize_with(
     constants: &[FunctionConstant],
 ) -> Result<Canonical, Refusal> {
     let Some(first) = modules.first() else {
-        return Err(refusal(RefusalKind::RejectedByDevice, "pipeline", entry, "no modules"));
+        return Err(refusal(Item::ModuleUnreadable, "pipeline", entry, "no modules"));
     };
     let mut m = link::link(first, &modules[1..], entry)?;
     let f = m
         .function_by_name(entry)
         .filter(|&i| !m.functions[i].is_declaration())
-        .ok_or_else(|| refusal(RefusalKind::RejectedByDevice, "function", entry, "no linked module defines it"))?;
+        .ok_or_else(|| refusal(Item::ModuleUnreadable, "function", entry, "no linked module defines it"))?;
     specialize::specialize(&mut m, records, constants)?;
     static_init::run(&mut m)?;
     inline::inline_all(&mut m, f)?;
@@ -182,7 +182,7 @@ pub fn simplify(m: &mut Module, f: usize) -> Result<(), Refusal> {
         }
     }
     let name = m.functions[f].common.name.clone();
-    Err(refusal(RefusalKind::NotImplemented, "canonicalization", &name, "the passes did not reach a fixed point"))
+    Err(refusal(Item::NonCanonical, "canonicalization", &name, "the passes did not reach a fixed point"))
 }
 
 /// A module holding function `f` of `m` and what it refers to (module-level metadata included, entry-point lists
@@ -258,7 +258,7 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
     for (i, g) in m.functions.iter().enumerate() {
         if i != f && !g.is_declaration() {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::NonCanonical,
                 &format!("function @{}", g.common.name),
                 name,
                 "a defined function other than the entry point is referred to (as a function pointer)",
@@ -276,7 +276,7 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
                             m,
                             f,
                             id,
-                            RefusalKind::NotImplemented,
+                            Item::ForeignCallee,
                             &format!("call of @{}", callee),
                             "no linked module defines the function, and it is not an intrinsic",
                         ));
@@ -289,7 +289,7 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
                             m,
                             f,
                             id,
-                            RefusalKind::NotImplemented,
+                            Item::NonCanonical,
                             &format!("call of @{}", callee),
                             "the canonical form has no such call, but the passes left it",
                         ));
@@ -300,7 +300,7 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
                         m,
                         f,
                         id,
-                        RefusalKind::NotImplemented,
+                        Item::FunctionConstants,
                         "function constant load",
                         "a load of a function constant global, which the passes fold",
                     ));
@@ -312,12 +312,60 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
     Ok(())
 }
 
-pub(crate) fn refusal(kind: RefusalKind, construct: &str, function: &str, reason: &str) -> Refusal {
+/// The tracked refusal-list items canonicalization refuses with ([`crate::wgsl::tracked`]): each refusal's reason
+/// starts with its item, `[namespace:id]`, and its kind is the item's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Item {
+    /// A call cycle: MSL has no recursion and WGSL cannot express it.
+    CallCycle,
+    /// A call of a declaration that is neither an intrinsic nor defined by a linked module.
+    ForeignCallee,
+    /// A static initializer canonicalization cannot run at compile time.
+    StaticInit,
+    /// A function constant record or query canonicalization cannot resolve.
+    FunctionConstants,
+    /// A function constant value of another type or size than the constant's, which Metal rejects.
+    FunctionConstantType,
+    /// A `bool` function constant value with a byte other than 0 or 1.
+    FunctionConstantBool,
+    /// A linked module that does not match the stage module (data layout).
+    LinkedModule,
+    /// The stage modules lack the entry function.
+    ModuleUnreadable,
+    /// A form the passes should have removed but did not (the canonical form's checks), or a limit of them.
+    NonCanonical,
+}
+
+impl Item {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Item::CallCycle => "compiler:call-cycle",
+            Item::ForeignCallee => "compiler:foreign-callee",
+            Item::StaticInit => "family:static-init",
+            Item::FunctionConstants => "family:function-constants",
+            Item::FunctionConstantType => "compiler:function-constant-type",
+            Item::FunctionConstantBool => "compiler:function-constant-bool-value",
+            Item::LinkedModule => "compiler:linked-module",
+            Item::ModuleUnreadable => "compiler:module-unreadable",
+            Item::NonCanonical => "compiler:non-canonical-input",
+        }
+    }
+
+    pub fn kind(self) -> RefusalKind {
+        match self {
+            Item::CallCycle => RefusalKind::NoExactLowering,
+            Item::FunctionConstantType | Item::LinkedModule | Item::ModuleUnreadable => RefusalKind::RejectedByDevice,
+            _ => RefusalKind::NotImplemented,
+        }
+    }
+}
+
+pub(crate) fn refusal(item: Item, construct: &str, function: &str, reason: &str) -> Refusal {
     Refusal {
-        kind,
+        kind: item.kind(),
         construct: construct.to_string(),
         location: Some(Location { function: function.to_string(), instruction: None }),
-        reason: reason.to_string(),
+        reason: format!("[{}] {}", item.tag(), reason),
         reference: None,
     }
 }
@@ -326,18 +374,18 @@ pub(crate) fn refusal_at(
     m: &Module,
     f: usize,
     i: crate::ir::InstId,
-    kind: RefusalKind,
+    item: Item,
     construct: &str,
     reason: &str,
 ) -> Refusal {
     Refusal {
-        kind,
+        kind: item.kind(),
         construct: construct.to_string(),
         location: Some(Location {
             function: m.functions[f].common.name.clone(),
             instruction: Some(crate::ir::print::print_instruction(m, f, i)),
         }),
-        reason: reason.to_string(),
+        reason: format!("[{}] {}", item.tag(), reason),
         reference: None,
     }
 }

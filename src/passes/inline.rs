@@ -15,11 +15,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::api::{Refusal, RefusalKind};
+use crate::api::Refusal;
 use crate::ir::{AttrKind, Attribute, Block, BlockId, GlobalId, InstId, Module, Op, Value};
 
 use super::util::{new_inst, operands_mut, remove_inst, replace_uses, successors_mut, terminator};
-use super::{refusal, refusal_at};
+use super::{Item, refusal, refusal_at};
 
 /// Instructions in the entry point above which inlining refuses (a guard against exponential growth).
 const MAX_INSTS: usize = 4_000_000;
@@ -38,14 +38,14 @@ pub fn inline_all(m: &mut Module, f: usize) -> Result<(), Refusal> {
                 m,
                 f,
                 call,
-                RefusalKind::NoExactLowering,
+                Item::CallCycle,
                 &format!("call of @{}", m.functions[callee].common.name),
                 "a call cycle (recursion), which MSL forbids and WGSL cannot express",
             ));
         }
         if m.functions[f].insts.len() > MAX_INSTS {
             return Err(refusal(
-                RefusalKind::NotImplemented,
+                Item::NonCanonical,
                 "inlining",
                 &m.functions[f].common.name,
                 &format!("the inlined function exceeds {} instructions", MAX_INSTS),
@@ -82,14 +82,7 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
     let g = m.functions[callee].clone();
     let (_, _, vararg) = m.types.function(g.ty).map(|(r, p, v)| (r, p.to_vec(), v)).unwrap();
     if vararg {
-        return Err(refusal_at(
-            m,
-            f,
-            call,
-            RefusalKind::NotImplemented,
-            "variadic call",
-            "a call of a variadic function",
-        ));
+        return Err(refusal_at(m, f, call, Item::NonCanonical, "variadic call", "a call of a variadic function"));
     }
     let Op::Call { args, fn_ty, attrs, .. } = m.functions[f].inst(call).op.clone() else { unreachable!() };
     if fn_ty != g.ty {
@@ -97,7 +90,7 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
             m,
             f,
             call,
-            RefusalKind::RejectedByDevice,
+            Item::ModuleUnreadable,
             "call",
             "the call's function type differs from the callee's",
         ));
@@ -266,7 +259,7 @@ fn memcpy_decl(m: &mut Module, addrspace: u32) -> Result<usize, Refusal> {
         return Ok(i);
     }
     Err(refusal(
-        RefusalKind::NotImplemented,
+        Item::NonCanonical,
         "byval argument",
         &name,
         "a byval argument needs llvm.memcpy, which the module does not declare",
