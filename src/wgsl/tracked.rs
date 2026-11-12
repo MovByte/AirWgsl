@@ -293,6 +293,15 @@ pub const ITEMS: &[Item] = &[
         reference: "MSL 6.10.1, 6.16; D1 device profile",
     },
     Item {
+        id: "icb-layout",
+        owner: Some("C0"),
+        kind: RefusalKind::NotImplemented,
+        summary: "an indirect command buffer encoded from a shader, or a command buffer or pipeline state passed to \
+                  one: the wire schema does not define the indirect command buffer's memory layout the commands are \
+                  written in",
+        reference: "plan 5.7 (indirect command buffers); MSL 6.17",
+    },
+    Item {
         id: "threadgroup-memory-length",
         owner: None,
         kind: RefusalKind::RejectedByDevice,
