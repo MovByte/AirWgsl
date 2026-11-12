@@ -1,13 +1,16 @@
 # Shader-language questions from sections 2.8 and 5 of the translator plan. Citations are
-# verified by tables/check.py; measurement citations name tables/measure/air_probe.toml.
+# verified by tables/check.py; measurement citations name the records in tables/measure/.
 
 [[question]]
 id = "5.1-name-sources"
 plan = "5.1"
 question = "Where do the accepted air.* names come from, and do the two sources agree?"
 status = "resolved"
-answer = "MTLCompiler.framework links libGPUCompiler.dylib, whose implementation libraries hold the front end's AIR name tables; the five images, extracted from the 21H461 cache, contribute 10,427 identifiers (gen/frontend_names.py). The system corpus, every AIR container the corpus index lists (246 files: 154 metallibs, 62 pipeline-library functions files, 8 Mach-O binary archives, 1 universal file, 6 dyld shared cache files with embedded metallibs, 8 compiler runtime archives, 3 bitcode files and 4 GPU driver runtime tables; 19,270 distinct modules), declares 1,138 air.* functions and uses 168 air.* metadata names (gen/survey_corpus.py). They do not coincide: 734 corpus functions are absent from the strings because the front end composes type-suffixed names from stems at run time (air.acos + .f32); the probe measurement shows that composition. The table therefore classifies the union by family patterns over stems and type suffixes. Every corpus metadata name but air.compile.native_double_disable is also in the strings."
+answer = "From the target's compiler itself. libGPUCompilerImpl.dylib keeps the air.* functions in LLVM-style intrinsic tables, one per AIR version from 1.6 to 2.6 (llvm::air::AIRFunctionInfo; the 2.6 table has 10,033 functions, 913 of them overloaded); it names a function by its table name followed, for each overloaded type, by a dot and the type as llvm_utils::getMangledTypeStr writes it, and accepts a function only when its name equals that construction (measurement air-grammar). A closed list of complete names cannot match this: the type-suffixed names are composed at run time (air.acos + .f32), and the earlier list missed 2,437 of the 4,927 names the generated corpus emits. The table therefore lists the table functions with their overload slots ([[function]]) and the type tokens each slot takes ([[domain]]); every air.* function of the system corpus (every container of its index), of the generated corpus and of the probe measurement is accepted ([grammar] holds the counts). The compiler's other air.* strings and the corpora's metadata names are [[name]] rows: of the system corpus's metadata names, every one but air.compile.native_double_disable is also among the strings."
 cite = [
+  { measure = "air-grammar", case = "get-name", quote = "the name is Names[ID-1] followed, for each overloaded type T in argument-number order, by \".\" and llvm_utils::getMangledTypeStr(T)" },
+  { measure = "air-grammar", case = "is-valid-function", quote = "the function's name must equal getName(ID, the collected types)" },
+  { measure = "air-grammar", case = "table-2d6", quote = "functions: 10033" },
   { measure = "air-probe", case = "math_acos_h", quote = "air.acos.f16" },
 ]
 
@@ -38,7 +41,7 @@ id = "5.2-double-in-corpus"
 plan = "5.2"
 question = "Does any system module compute in double?"
 status = "resolved"
-answer = "Yes, although MSL does not support double: three modules declare air.floor.f64 and three air.fmin.f64 (survey counts in the [[name]] rows). They are refused (family double); if an A10X-selected path reaches them the refusal is LOUD with the module named, and the producing library needs identifying."
+answer = "Yes, although MSL does not support double: three modules declare air.floor.f64 and three air.fmin.f64 (the system corpus survey). They are refused (family double); if an A10X-selected path reaches them the refusal is LOUD with the module named, and the producing library needs identifying."
 cite = [
   { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
 ]

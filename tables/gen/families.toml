@@ -1,5 +1,20 @@
-# Families of air.* names. Every name of intrinsics.toml matches exactly one family's
-# patterns (Python full match). decision is one of:
+# Families of air.* names, and the type domains of overloaded functions.
+#
+# An air.* function name is the name of a function of the target's AIR function table
+# (a stem, listed as a [[function]] of intrinsics.toml with its overload slots) followed by
+# one type token per slot (measurement air-grammar). A family's stem patterns classify
+# stems: every stem matches exactly one family's stem patterns (Python full match). Its
+# match patterns classify the other air.* names (metadata strings, named metadata and the
+# front end's other strings): every such name matches exactly one family's match patterns.
+#
+# The type tokens a slot accepts are a [[domain]]: the slot kind's default domain, or the
+# domain the stem's family names for that kind in domains. A domain lists the element
+# types (the mangled LLVM types of the MSL scalar types), the widths (1 for a scalar) and,
+# for pointers, the address spaces. A token whose element is listed in the domain's
+# reclassify moves the name to that family: the forms in double and bfloat are refused or
+# device-unsupported whatever their stem.
+#
+# A family's decision is one of:
 #   numerics            float math; the lowering is the numerics.toml row named in rows
 #   native              a WGSL built-in or statement with the same definition
 #   lowering            an exact WGSL implementation (integer emulation, memory model,
@@ -15,16 +30,139 @@
 # probe lists measurement cases (tables/measure/air_probe.toml) whose emitted names are
 # in the family, linking the MSL construct to the names.
 
+# ---------------------------------------------------------------- type domains
+
+[[domain]]
+id = "value"
+default_for = ["any"]
+elements = ["i1", "i8", "i16", "i32", "i64", "f16", "f32", "bf16", "f64"]
+widths = [1, 2, 3, 4]
+reclassify = [["f64", "double"], ["bf16", "bfloat"]]
+reason = "A slot of kind any takes a value of any MSL scalar or vector type: bool, char and uchar, short and ushort, int and uint, long and ulong, half, float and bfloat mangle as i1, i8, i16, i32, i64, f16, f32 and bf16 (getMangledTypeStr: i and the bit width for integers), and vectors have 2, 3 or 4 components. f64 (double, which MSL does not support) is in the domain because system modules use it; such names are refused (family double)."
+cite = [
+  { measure = "air-grammar", case = "arg-kinds", quote = "0 any: returns no mismatch: any type fills the slot" },
+  { measure = "air-grammar", case = "mangled-type", quote = "half f16; bfloat bf16; float f32; double f64" },
+  { src = "msl", ref = "2.1", quote = "Metal supports the scalar types listed in Table 2.1." },
+  { src = "msl", ref = "2.2", quote = "Metal also supports vec<T,n> where T is a valid scalar type and n is 2, 3, or 4" },
+  { measure = "air-probe", case = "simd_simd_sum", quote = "air.simd_sum.f32" },
+]
+
+[[domain]]
+id = "integer"
+default_for = ["anyint"]
+elements = ["i8", "i16", "i32", "i64"]
+widths = [1, 2, 3, 4]
+reason = "The overloaded integer functions take the scalar or vector integer types; bool is not one of them."
+cite = [
+  { measure = "air-grammar", case = "arg-kinds", quote = "1 anyint: the type, or the element type of a vector, has type ID 13 (integer)" },
+  { src = "msl", ref = "6.4", quote = "T is one of the scalar or vector integer types." },
+  { measure = "air-probe", case = "int_clz_i32s", quote = "air.clz.i32" },
+]
+
+[[domain]]
+id = "float"
+default_for = ["anyfloat"]
+elements = ["f16", "f32", "f64"]
+widths = [1, 2, 3, 4]
+reclassify = [["f64", "double"]]
+reason = "The overloaded floating-point functions take the scalar or vector half and float types; f64 is in the domain because system modules call air.floor.f64 and air.fmin.f64, and those names are refused (family double)."
+cite = [
+  { measure = "air-grammar", case = "arg-kinds", quote = "2 anyfloat: the type, or the element type of a vector, has a type ID of at most 6" },
+  { src = "msl", ref = "6.6", quote = "T is one of the scalar or vector half or float floating-point types." },
+  { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
+  { measure = "air-probe", case = "math_acos_h", quote = "air.acos.f16" },
+]
+
+[[domain]]
+id = "vector"
+default_for = ["anyvector"]
+elements = ["i1", "i8", "i16", "i32", "i64", "f16", "f32", "bf16", "f64"]
+widths = [2, 3, 4]
+reclassify = [["f64", "double"], ["bf16", "bfloat"]]
+reason = "A slot of kind anyvector takes an MSL vector type of 2, 3 or 4 components; families whose functions take one shape name a narrower domain."
+cite = [
+  { measure = "air-grammar", case = "arg-kinds", quote = "3 anyvector: the type ID is 18 or 19 (fixed or scalable vector)" },
+  { src = "msl", ref = "2.2", quote = "Metal also supports vec<T,n> where T is a valid scalar type and n is 2, 3, or 4" },
+]
+
+[[domain]]
+id = "pointer"
+default_for = ["anypointer"]
+spaces = [1, 2, 3]
+elements = ["i8", "i16", "i32", "f16", "f32", "bf16"]
+widths = [1]
+reclassify = [["bf16", "bfloat"]]
+reason = "The functions with pointer slots take device and constant buffers (indirect command buffer commands, function table buffers: cast to char pointers; index buffers: ushort and uint), threadgroup and device memory (asynchronous copies, SIMD-group matrix loads and stores of half, bfloat and float) and the constant rasterization rate map. AIR numbers the device, constant and threadgroup address spaces 1, 2 and 3."
+cite = [
+  { measure = "air-grammar", case = "arg-kinds", quote = "4 anypointer: the type ID is 15 (pointer)" },
+  { measure = "air-grammar", case = "mangled-type", quote = "pointer: p, address space, pointee" },
+  { src = "msl", ref = "6.17.1", quote = "void set_vertex_buffer(constant T *buffer, uint index);" },
+  { src = "msl", ref = "6.17.1", quote = "constant ushort *index_buffer," },
+  { measure = "air-probe", case = "as_device", quote = "pointer_address_spaces: 1" },
+  { measure = "air-probe", case = "as_constant", quote = "pointer_address_spaces: 2" },
+  { measure = "air-probe", case = "as_threadgroup", quote = "pointer_address_spaces: 3" },
+]
+
+[[domain]]
+id = "boolean-vector"
+elements = ["i1"]
+widths = [2, 3, 4]
+reason = "all and any reduce a Boolean vector."
+cite = [
+  { src = "msl", ref = "6.5", quote = "Tb only refers to the scalar or vector Boolean types." },
+  { measure = "air-probe", case = "rel_all", quote = "air.all.v4i1" },
+]
+
+[[domain]]
+id = "texel"
+elements = ["f16", "f32", "i16", "i32"]
+widths = [4]
+reason = "Texture sample, read, write and gather values are 4-component vectors of the texture's color type: half, float, short, ushort, int or uint (float for depth textures)."
+cite = [
+  { src = "msl", ref = "6.13", quote = "Tv denotes a 4-component vector type based on the templated type <T> for declaring the texture type" },
+  { src = "msl", ref = "2.9", quote = "For texture types (except depth texture types), T can be half, float, short, ushort, int, or uint." },
+  { measure = "air-probe", case = "tex_read_2d", quote = "air.read_texture_2d.v4f32" },
+]
+
+[[domain]]
+id = "matrix"
+elements = ["f16", "f32", "bf16"]
+widths = [64]
+reason = "A SIMD-group matrix is 8 by 8 elements of half, bfloat or float; AIR passes it as a 64-element vector."
+cite = [
+  { src = "msl", ref = "2.4", quote = "where T is half, bfloat (in Metal 3.1 and later) or float and Cols and Rows are 8" },
+]
+
+[[domain]]
+id = "matrix-element"
+elements = ["f16", "f32", "bf16"]
+widths = [1]
+reason = "The diagonal and fill values of a SIMD-group matrix are scalars of its element type."
+cite = [
+  { src = "msl", ref = "6.8.1", quote = "simdgroup_matrix<T,Cols,Rows>(T dval) Creates a diagonal matrix with the given value." },
+]
+
+[[domain]]
+id = "matrix-pointer"
+spaces = [1, 3]
+elements = ["f16", "f32", "bf16"]
+widths = [1]
+reason = "SIMD-group matrices load from and store to device and threadgroup memory of their element type."
+cite = [
+  { src = "msl", ref = "6.8.1", quote = "const threadgroup T *src" },
+  { src = "msl", ref = "6.8.1", quote = "const device T *src" },
+]
+
 # ---------------------------------------------------------------- numeric types
 
 [[family]]
 id = "double"
-match = ['air\.(?:.*\.)?(?:v\d+)?f64(?:\..*)?', 'air\.double_type']
-kind = "function"
+stem = ['air\.(?:.*\.)?(?:v\d+)?f64(?:\..*)?']
+match = ['air\.double_type']
 msl = "double-precision forms"
 decision = "refusal"
 wgsl = "none"
-reason = "MSL does not support the double type and WGSL has no 64-bit float; plan section 5.2 treats a module computing in double as malformed input. These names are front-end entries, and two system modules use them (question 5.2-double-in-corpus)."
+reason = "MSL does not support the double type and WGSL has no 64-bit float; plan section 5.2 treats a module computing in double as malformed input. These names are front-end entries, and system modules use air.floor.f64 and air.fmin.f64 (question 5.2-double-in-corpus)."
 cite = [
   { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
   { src = "wgsl", ref = "#floating-point-types", absent = '\bf64\b' },
@@ -32,8 +170,8 @@ cite = [
 
 [[family]]
 id = "bfloat"
-match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?!simdgroup_matrix)(?:.*\.)?(?:v\d+)?bf16(?:\..*)?', 'air\.bfloat_type']
-kind = "function"
+stem = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?!simdgroup_matrix)(?:.*\.)?(?:v\d+)?bf16(?:\..*)?']
+match = ['air\.bfloat_type']
 msl = "bfloat type and operations"
 decision = "device-unsupported"
 wgsl = "none"
@@ -47,9 +185,8 @@ cite = [
 
 [[family]]
 id = "math-float"
-match = ['air\.(?:fast_)?(?:acos|acosh|asin|asinh|atan|atan2|atanh|ceil|copysign|cos|cosh|cospi|divide|exp|exp2|exp10|fabs|fdim|floor|fma|fmax|fmax3|fmedian3|fmin|fmin3|fmod|fract|frexp|ilogb|ldexp|log|log2|log10|modf|nextafter|pow|powr|rint|round|rsqrt|sin|sincos|sinh|sinpi|sqrt|tan|tanh|tanpi|trunc|saturate|mix|smoothstep|step|sign)(?:\.(?:v\d+)?(?:f16|f32|i32|i16))*',
-         'air\.(?:fast_)?clamp(?:\.(?:v\d+)?(?:f16|f32))*']
-kind = "function"
+stem = ['air\.(?:fast_)?(?:acos|acosh|asin|asinh|atan|atan2|atanh|ceil|copysign|cos|cosh|cospi|divide|exp|exp2|exp10|fabs|fdim|floor|fma|fmax|fmax3|fmedian3|fmin|fmin3|fmod|fract|frexp|ilogb|ldexp|log|log2|log10|modf|nextafter|pow|powr|rint|round|rsqrt|sin|sincos|sinh|sinpi|sqrt|tan|tanh|tanpi|trunc|saturate|mix|smoothstep|step|sign)(?:\.(?:v\d+)?(?:f16|f32|i32|i16))*',
+        'air\.(?:fast_)?clamp(?:\.(?:v\d+)?(?:f16|f32))*']
 msl = "Table 6.4 math functions and the floating-point common functions of Table 6.1 (fast_ prefix: fast-math variant)"
 decision = "numerics"
 wgsl = "per numerics.toml row"
@@ -63,8 +200,7 @@ cite = [
 
 [[family]]
 id = "math-geometric"
-match = ['air\.(?:fast_)?(?:dot|distance|distance_squared|length|length_squared|normalize|cross|reflect|refract|faceforward)(?:\.(?:v\d+)?(?:f16|f32))+', 'air\.dot']
-kind = "function"
+stem = ['air\.(?:fast_)?(?:dot|distance|distance_squared|length|length_squared|normalize|cross|reflect|refract|faceforward)(?:\.(?:v\d+)?(?:f16|f32))+']
 msl = "Table 6.11 geometric functions"
 decision = "numerics"
 wgsl = "per numerics.toml row"
@@ -77,23 +213,20 @@ cite = [
 
 [[family]]
 id = "math-not-in-msl"
-match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:fast_|half_|native_)?(?:acospi|asinpi|atanpi|atan2pi|cbrt|erf|erfc|expm1|hypot|lgamma|lgamma_r|log1p|logb|remainder|remquo|rootn|pown|tgamma|mad)(?:\..*)?',
-         'air\.(?:half|native)_(?:cos|sin|tan|exp|exp2|exp10|log|log2|log10|powr|rsqrt|sqrt)']
-kind = "function"
+stem = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:fast_|half_|native_)?(?:acospi|asinpi|atanpi|atan2pi|cbrt|erf|erfc|expm1|hypot|lgamma|lgamma_r|log1p|logb|remainder|remquo|rootn|pown|tgamma|mad)(?:\..*)?',
+        'air\.(?:half|native)_(?:cos|sin|tan|exp|exp2|exp10|log|log2|log10|powr|rsqrt|sqrt)']
 msl = "none"
 decision = "not-from-msl"
 wgsl = "none"
-reason = "OpenCL-style math entry points of the shared front end. MSL's math table defines none of them and no system metallib calls them."
+reason = "OpenCL-style math entry points of the shared front end. MSL's math table defines none of them and no system module calls them."
 cite = [
   { src = "msl", ref = "6", absent = '\b(acospi|asinpi|atanpi|atan2pi|cbrt|erfc?|expm1|hypot|lgamma|lgamma_r|log1p|logb|remainder|remquo|rootn|pown|tgamma|native_(cos|sin|exp|log|sqrt)|half_(cos|sin|exp|log|sqrt))\(' },
 ]
 
 [[family]]
 id = "integer"
-match = ['air\.(?:abs|abs_diff|add_sat|clamp|hadd|mad_hi|mad_sat|max|max3|median3|min|min3|mul_hi|rhadd|sub_sat|mad24|mul24|extract_bits|insert_bits)\.[su](?:\.(?:v\d+)?i(?:8|16|32|64))?',
-         'air\.(?:clz|ctz|popcount|reverse_bits|rotate)(?:\.(?:v\d+)?i(?:8|16|32|64))?',
-         'air\.(?:abs|abs_diff|add_sat|hadd|mad_hi|mad_sat|max|max3|median3|min|min3|mul_hi|rhadd|sub_sat|mad24|mul24|extract_bits|insert_bits)']
-kind = "function"
+stem = ['air\.(?:abs|abs_diff|add_sat|clamp|hadd|mad_hi|mad_sat|max|max3|median3|min|min3|mul_hi|rhadd|sub_sat|mad24|mul24|extract_bits|insert_bits)\.[su](?:\.(?:v\d+)?i(?:8|16|32|64))?',
+        'air\.(?:clz|ctz|popcount|reverse_bits|rotate)(?:\.(?:v\d+)?i(?:8|16|32|64))?']
 msl = "Table 6.2 integer functions"
 decision = "lowering"
 owner = "S5"
@@ -108,8 +241,8 @@ cite = [
 
 [[family]]
 id = "relational"
-match = ['air\.(?:all|any)(?:\.v\d+i1)?']
-kind = "function"
+stem = ['air\.(?:all|any)']
+domains = { anyvector = "boolean-vector" }
 msl = "Table 6.3 relational functions all and any (the others lower to plain comparisons)"
 decision = "native"
 wgsl = "all, any"
@@ -123,8 +256,7 @@ cite = [
 
 [[family]]
 id = "conversion"
-match = ['air\.convert(?:\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64))?']
-kind = "function"
+stem = ['air\.convert\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)']
 msl = "static_cast and implicit conversions (2.23, 2.24, 8.6)"
 decision = "lowering"
 owner = "S5"
@@ -138,12 +270,11 @@ cite = [
 
 [[family]]
 id = "conversion-explicit-rounding"
-match = ['air\.convert\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)(?:\.rt[enpz](?:\.sat)?|\.sat)']
-kind = "function"
+stem = ['air\.convert\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)(?:\.rt[enpz](?:\.sat)?|\.sat)']
 msl = "none"
 decision = "not-from-msl"
 wgsl = "none"
-reason = "Conversions with an explicit rounding mode or saturation are front-end entries for OpenCL-style convert_T_rtX_sat; MSL's static_cast has neither, and no system metallib uses them."
+reason = "Conversions with an explicit rounding mode or saturation are front-end entries for OpenCL-style convert_T_rtX_sat; MSL's static_cast has neither, and no system module uses them."
 cite = [
   { src = "msl", ref = "2.23", quote = "with no saturation" },
   { src = "msl", ref = "6", absent = '\bconvert_\w+_rt[enpz]' },
@@ -151,8 +282,7 @@ cite = [
 
 [[family]]
 id = "pack-unpack"
-match = ['air\.(?:un)?pack\.[a-z0-9]+(?:\.[a-z0-9]+)*', 'air\.(?:un)?pack']
-kind = "function"
+stem = ['air\.(?:un)?pack\.[a-z0-9]+(?:\.[a-z0-9]+)*']
 msl = "6.15 pack and unpack functions"
 decision = "lowering"
 owner = "S5"
@@ -168,8 +298,7 @@ cite = [
 
 [[family]]
 id = "derivative"
-match = ['air\.(?:dfdx|dfdy|fwidth)(?:\.(?:v\d+)?f(?:16|32))?']
-kind = "function"
+stem = ['air\.(?:dfdx|dfdy|fwidth)']
 msl = "Table 6.19 dfdx, dfdy, fwidth"
 decision = "native"
 wgsl = "dpdxFine, dpdyFine, fwidthFine"
@@ -183,8 +312,7 @@ cite = [
 
 [[family]]
 id = "discard"
-match = ['air\.discard_fragment']
-kind = "function"
+stem = ['air\.discard_fragment']
 msl = "discard_fragment"
 decision = "lowering"
 owner = "S6b"
@@ -199,8 +327,8 @@ cite = [
 
 [[family]]
 id = "sample-queries"
-match = ['air\.get_num_samples(?:\.i32)?', 'air\.get_sample_position(?:\..*)?']
-kind = "function"
+stem = ['air\.get_num_samples(?:\.i32)?',
+        'air\.get_sample_position(?:\..*)?']
 msl = "Table 6.20 get_num_samples, get_sample_position"
 decision = "lowering"
 owner = "S6b"
@@ -214,8 +342,9 @@ cite = [
 
 [[family]]
 id = "pull-model-interpolation"
-match = ['air\.interpolate_(?:center|centroid|offset|sample)_(?:no_)?perspective(?:\..*)?', 'air\.interpolant_type', 'air\.interpolation_function']
-kind = "function"
+stem = ['air\.interpolate_(?:center|centroid|offset|sample)_(?:no_)?perspective']
+match = ['air\.interpolant_type',
+         'air\.interpolation_function']
 msl = "6.12 pull-model interpolation (interpolant<T, P>)"
 decision = "refusal"
 wgsl = "none"
@@ -231,10 +360,8 @@ cite = [
 
 [[family]]
 id = "texture-sample"
-match = ['air\.sample_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube)(?:_grad)?(?:\.[a-z0-9]+)*',
-         'air\.sample_compare_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube)(?:_grad)?(?:\.[a-z0-9]+)*',
-         'air\.sample_texture', 'air\.sample_depth', 'air\.sample_compare_']
-kind = "function"
+stem = ['air\.sample_(?:compare_)?(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube)(?:_grad)?(?:\.[a-z0-9]+)*']
+domains = { anyvector = "texel" }
 msl = "texture sample and sample_compare member functions (6.13)"
 decision = "lowering"
 owner = "S6a"
@@ -249,9 +376,8 @@ cite = [
 
 [[family]]
 id = "texture-read-write"
-match = ['air\.(?:read|write)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)(?:\.[a-z0-9]+)*',
-         'air\.(?:read|write)_(?:texture|depth)']
-kind = "function"
+stem = ['air\.(?:read|write)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)(?:\.[a-z0-9]+)*']
+domains = { anyvector = "texel" }
 msl = "texture read and write member functions (6.13)"
 decision = "lowering"
 owner = "S6a"
@@ -267,8 +393,8 @@ cite = [
 
 [[family]]
 id = "texture-gather"
-match = ['air\.gather(?:_compare)?_(?:texture|depth)_(?:2d_array|2d|cube_array|cube)(?:\.[a-z0-9]+)*', 'air\.gather_texture', 'air\.gather_depth', 'air\.gather_compare_depth']
-kind = "function"
+stem = ['air\.gather(?:_compare)?_(?:texture|depth)_(?:2d_array|2d|cube_array|cube)(?:\.[a-z0-9]+)*']
+domains = { anyvector = "texel" }
 msl = "texture gather and gather_compare member functions (6.13)"
 decision = "lowering"
 owner = "S6a"
@@ -282,9 +408,7 @@ cite = [
 
 [[family]]
 id = "texture-query"
-match = ['air\.get_(?:width|height|depth|array_size|num_mip_levels|num_samples)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)',
-         'air\.get_(?:width|height|depth|array_size|num_mip_levels|num_samples)_']
-kind = "function"
+stem = ['air\.get_(?:width|height|depth|array_size|num_mip_levels|num_samples)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)']
 msl = "texture get_width, get_height, get_depth, get_array_size, get_num_mip_levels, get_num_samples (6.13)"
 decision = "lowering"
 owner = "S6a"
@@ -298,8 +422,7 @@ cite = [
 
 [[family]]
 id = "texture-lod-query"
-match = ['air\.calculate_(?:clamped|unclamped)_lod_(?:texture|depth)_[a-z0-9_]+', 'air\.calculate_(?:clamped|unclamped)_lod_']
-kind = "function"
+stem = ['air\.calculate_(?:clamped|unclamped)_lod_(?:texture|depth)_[a-z0-9_]+']
 msl = "calculate_clamped_lod and calculate_unclamped_lod (6.13)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -312,8 +435,8 @@ cite = [
 
 [[family]]
 id = "texture-fence"
-match = ['air\.fence_(?:texture|depth)(?:_[a-z0-9_]+)?']
-kind = "function"
+stem = ['air\.fence_(?:texture|depth)_[a-z0-9_]+']
+match = ['air\.fence_depth']
 msl = "texture fence() for access::read_write textures (6.13.17)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -326,8 +449,7 @@ cite = [
 
 [[family]]
 id = "texture-null"
-match = ['air\.(?:is_null|get_null)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)']
-kind = "function"
+stem = ['air\.(?:is_null|get_null)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)']
 msl = "is_null_texture (6.13.18) and null texture handles"
 decision = "emulation"
 plan = "5.7 (air.get_null_texture*, is_null_texture row)"
@@ -341,8 +463,7 @@ cite = [
 
 [[family]]
 id = "texture-atomic"
-match = ['air\.atomic_[a-z_]+_explicit_(?:texture|depth)_[a-z0-9_]+(?:\.[a-z0-9]+)*', 'air\.atomic_compare_exchange_weak_explicit_']
-kind = "function"
+stem = ['air\.atomic_[a-z_]+_explicit_(?:texture|depth)_[a-z0-9_]+(?:\.[a-z0-9]+)*']
 msl = "texture atomic member functions"
 decision = "device-unsupported"
 wgsl = "none"
@@ -353,24 +474,91 @@ cite = [
 
 [[family]]
 id = "texture-not-in-msl"
-match = ['air\.get_channel_(?:data_type|order)_(?:[a-z0-9_]+)?', 'air\.get_unique_id_(?:texture|depth)', 'air\.get_unique_identifier_(?:(?:texture|depth)_[a-z0-9_]+|sampler|command_buffer|compute_pipeline_state|render_pipeline_state)?', 'air\.get_unique_identifier']
-kind = "function"
+stem = ['air\.get_channel_(?:data_type|order)_[a-z0-9_]+',
+        'air\.get_unique_identifier_(?:(?:texture|depth)_[a-z0-9_]+|sampler|command_buffer|compute_pipeline_state|render_pipeline_state)',
+        'air\.get_unique_identifier']
+match = ['air\.get_unique_id_(?:texture|depth)']
 msl = "none"
 decision = "not-from-msl"
 wgsl = "none"
-reason = "Image channel queries and unique-identifier queries are front-end entries that the MSL specification does not define and no system metallib calls."
+reason = "Image channel queries and unique-identifier queries are front-end entries that the MSL specification does not define and no system module calls."
 cite = [
   { src = "msl", ref = "6", absent = '\bget_channel_(data_type|order)\b|\bget_unique_identifier\b|\bget_resource_id\b' },
+]
+
+[[family]]
+id = "stage-in-grid-not-in-msl"
+stem = ['air\.get_stage_in_grid_(?:origin|size)']
+msl = "none"
+decision = "not-from-msl"
+wgsl = "none"
+reason = "Function forms of the stage-in grid origin and size that the MSL specification does not define; no corpus module calls them."
+cite = [
+  { src = "msl", ref = "5", absent = 'stage_in_grid' },
+  { src = "msl", ref = "6", absent = 'stage_in_grid' },
+]
+
+[[family]]
+id = "name-prefixes"
+match = ['air\.atomic',
+         'air\.atomic\.global',
+         'air\.atomic_compare_exchange_weak_explicit_',
+         'air\.calculate_clamped_lod_',
+         'air\.calculate_unclamped_lod_',
+         'air\.convert',
+         'air\.dot',
+         'air\.draw_',
+         'air\.draw_indexed_patches',
+         'air\.draw_indexed_primitives',
+         'air\.draw_patches',
+         'air\.fence_texture',
+         'air\.gather_compare_depth',
+         'air\.gather_depth',
+         'air\.gather_texture',
+         'air\.get_array_size_',
+         'air\.get_channel_data_type_',
+         'air\.get_channel_order_',
+         'air\.get_data_pointer_',
+         'air\.get_depth_',
+         'air\.get_height_',
+         'air\.get_instance_acceleration_structure',
+         'air\.get_instance_count_',
+         'air\.get_num_mip_levels_',
+         'air\.get_num_samples_',
+         'air\.get_primitive_acceleration_structure',
+         'air\.get_unique_identifier_',
+         'air\.get_width_',
+         'air\.lgamma_r',
+         'air\.read_depth',
+         'air\.read_texture',
+         'air\.remquo',
+         'air\.sample_compare_',
+         'air\.sample_depth',
+         'air\.sample_texture',
+         'air\.set_fragment_buffer',
+         'air\.set_kernel_buffer',
+         'air\.set_vertex_buffer',
+         'air\.simdgroup_matrix',
+         'air\.store',
+         'air\.vload',
+         'air\.vstore',
+         'air\.write_depth',
+         'air\.write_imageblock_slice_to_',
+         'air\.write_texture']
+msl = "none"
+decision = "refusal"
+wgsl = "none"
+reason = "Strings of the target's compiler images that are proper prefixes of names in its AIR function tables and name no function themselves: the compiler recognizes name groups by them. The target's lookup finds no function for them, so a module that calls one is refused as the target refuses it; no corpus module uses one as metadata."
+cite = [
+  { measure = "air-grammar", case = "lookup-name", quote = "otherwise there is no function" },
 ]
 
 # ---------------------------------------------------------------- atomics and synchronization
 
 [[family]]
 id = "atomic-int32"
-match = ['air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.[su]\.i32',
-         'air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.i32',
-         'air\.atomic', 'air\.atomic\.global']
-kind = "function"
+stem = ['air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.[su]\.i32',
+        'air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.i32']
 msl = "32-bit atomic functions on device and threadgroup memory (6.16)"
 decision = "lowering"
 owner = "S6d"
@@ -385,8 +573,7 @@ cite = [
 
 [[family]]
 id = "atomic-float"
-match = ['air\.atomic\.(?:global|local)\.[a-z.]+\.f32']
-kind = "function"
+stem = ['air\.atomic\.(?:global|local)\.[a-z.]+\.f32']
 msl = "atomic_float"
 decision = "device-unsupported"
 wgsl = "none"
@@ -399,8 +586,7 @@ cite = [
 
 [[family]]
 id = "atomic-int64"
-match = ['air\.atomic\.(?:global|local)\.[a-z.]+\.(?:[su]\.)?i64']
-kind = "function"
+stem = ['air\.atomic\.(?:global|local)\.[a-z.]+\.(?:[su]\.)?i64']
 msl = "64-bit atomic functions (6.16.4.6)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -412,8 +598,7 @@ cite = [
 
 [[family]]
 id = "atomic-fence"
-match = ['air\.atomic\.fence']
-kind = "function"
+stem = ['air\.atomic\.fence']
 msl = "atomic_thread_fence (6.16.3)"
 decision = "refusal"
 wgsl = "none"
@@ -425,8 +610,7 @@ cite = [
 
 [[family]]
 id = "threadgroup-barrier"
-match = ['air\.wg\.barrier']
-kind = "function"
+stem = ['air\.wg\.barrier']
 msl = "threadgroup_barrier(mem_flags)"
 decision = "lowering"
 owner = "S6d"
@@ -441,8 +625,7 @@ cite = [
 
 [[family]]
 id = "simdgroup-barrier"
-match = ['air\.simdgroup\.barrier']
-kind = "function"
+stem = ['air\.simdgroup\.barrier']
 msl = "simdgroup_barrier(mem_flags)"
 decision = "open"
 wgsl = "none"
@@ -456,8 +639,8 @@ cite = [
 
 [[family]]
 id = "simd-quad-functions"
-match = ['air\.(?:simd|quad)_[a-z_]+(?:\.[a-z0-9]+)*', 'air\.get_(?:simdgroup_size|thread_index_in_simdgroup|thread_index_in_quadgroup|simdgroup_index_in_threadgroup|simdgroups_per_threadgroup|quadgroup_index_in_threadgroup|quadgroups_per_threadgroup|dispatch_simdgroups_per_threadgroup|dispatch_quadgroups_per_threadgroup|dispatch_threads_per_threadgroup)(?:\.[a-z0-9]+)*']
-kind = "function"
+stem = ['air\.(?:simd|quad)_[a-z_]+(?:\.[su])?',
+        'air\.get_(?:simdgroup_size|thread_index_in_simdgroup|thread_index_in_quadgroup|simdgroup_index_in_threadgroup|simdgroups_per_threadgroup|quadgroup_index_in_threadgroup|quadgroups_per_threadgroup|dispatch_simdgroups_per_threadgroup|dispatch_quadgroups_per_threadgroup|dispatch_threads_per_threadgroup)(?:\.[a-z0-9]+)*']
 msl = "SIMD-group and quad-group functions (6.10.2, 6.10.3)"
 decision = "device-unsupported"
 wgsl = "subgroup and quad built-ins exist behind the subgroups feature, but the A10X family has none of these functions"
@@ -472,8 +655,8 @@ cite = [
 
 [[family]]
 id = "simdgroup-matrix"
-match = ['air\.simdgroup_matrix(?:_[a-z0-9_]+)?(?:\.[a-z0-9]+)*']
-kind = "function"
+stem = ['air\.simdgroup_matrix_[a-z0-9_]+']
+domains = { anyvector = "matrix", any = "matrix-element", anypointer = "matrix-pointer" }
 msl = "SIMD-group matrix functions (6.8)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -484,12 +667,13 @@ cite = [
 
 [[family]]
 id = "undocumented-async-copy"
-match = ['air\.simdgroup_async_copy_[12]d(?:\.[a-z0-9]+)*', 'air\.(?:wait_simdgroup_events|get_null_simdgroup_event|is_null_simdgroup_event)', 'air\.is_uniform(?:\.[a-z0-9]+)*']
-kind = "function"
+stem = ['air\.simdgroup_async_copy_[12]d',
+        'air\.(?:wait_simdgroup_events|get_null_simdgroup_event|is_null_simdgroup_event)',
+        'air\.is_uniform']
 msl = "none published"
 decision = "open"
 wgsl = "none"
-reason = "Used by system metallibs (corpus) but not defined by the MSL specification, so there is no specification to translate from. Which of these an A10X-selected path reaches, and their semantics, need characterization (corpus call sites and, where the device allows, measurement) before a decision."
+reason = "Used by system modules (corpus) but not defined by the MSL specification, so there is no specification to translate from. Which of these an A10X-selected path reaches, and their semantics, need characterization (corpus call sites and, where the device allows, measurement) before a decision."
 cite = [
   { src = "msl", ref = "6", absent = '\bsimdgroup_async_copy\b|\bwait_simdgroup_events\b|\bis_uniform\b' },
 ]
@@ -498,11 +682,13 @@ cite = [
 
 [[family]]
 id = "imageblock-tile"
-match = ['air\.(?:load|store)\.(?:implicit_)?imageblock(?:\.[a-z0-9]+)*', 'air\.store\.imageblock\.mask', 'air\.get_imageblock_[a-z_]+',
-         'air\.write_imageblock_slice_to(?:_[a-z0-9_]*)?(?:\.[a-z0-9]+)*', 'air\.get_color_coverage_mask',
-         'air\.(?:imageblock|imageblock_data|imageblock_data_size|imageblock_master|imageblock_type|implicit_imageblock_data|alias_implicit_imageblock|alias_implicit_imageblock_render_target|ci_imageblock)',
-         'air\.(?:pixel_position_in_tile|pixels_per_tile|tile_index|raster_order_group|post_depth_coverage)', 'air\.store']
-kind = "function"
+stem = ['air\.(?:load|store)\.(?:implicit_)?imageblock(?:\.[a-z0-9]+)*',
+        'air\.get_imageblock_[a-z_]+',
+        'air\.write_imageblock_slice_to_[a-z0-9_]+(?:\.[a-z0-9]+)*',
+        'air\.get_color_coverage_mask',
+        'air\.(?:imageblock_data|implicit_imageblock_data)']
+match = ['air\.(?:imageblock|imageblock_data_size|imageblock_master|imageblock_type|alias_implicit_imageblock|alias_implicit_imageblock_render_target|ci_imageblock)',
+         'air\.(?:pixel_position_in_tile|pixels_per_tile|tile_index|raster_order_group|post_depth_coverage)']
 msl = "imageblocks, tile functions and raster order groups (2.11, 5.6, 6.14)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -515,8 +701,7 @@ cite = [
 
 [[family]]
 id = "rasterization-rate"
-match = ['air\.map_(?:screen_to_physical|physical_to_screen)_coordinates(?:\.[a-z0-9]+)*']
-kind = "function"
+stem = ['air\.map_(?:screen_to_physical|physical_to_screen)_coordinates']
 msl = "variable rasterization rate (6.18)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -527,10 +712,16 @@ cite = [
 
 [[family]]
 id = "ray-tracing"
-match = ['air\.intersect(?:\.[a-z_]+)*', 'air\.[a-z_]*intersection_query(?:\.[a-z_]+)*(?:\.[a-z0-9]+)*', 'air\.[a-z_]*acceleration_structure[a-z_]*',
-         'air\.[a-z_]*intersection_function_table[a-z_]*(?:\.[a-z0-9]+)*', 'air\.(?:accept_intersection|continue_search|intersection|bounding_box|triangle_data|curve_data|curve|curve_parameter|instancing|multi_level_instancing|world_space_data|instance_motion|primitive_motion|extended_limits|max_levels|key_frame_count|motion_start_time|motion_end_time|opaque_primitive|origin|direction|min_distance|max_distance|distance|world_space_origin|world_space_direction|object_to_world_transform|world_to_object_transform|geometry_id|primitive_data|user_instance_id|user_instance_id_count|instance_id_count|geometry_intersection_function_table_offset|instance_intersection_function_table_offset|triangle|time|projective_coordinates)',
-         'air\.get_(?:primitive|instance)_acceleration_structure(?:_[a-z_]+)?', 'air\.get_data_pointer_[a-z_]*', 'air\.get_instance_count_[a-z_]*']
-kind = "function"
+stem = ['air\.intersect(?:\.[a-z_]+)*',
+        'air\.[a-z_]*intersection_query(?:\.[a-z_]+)*(?:\.[a-z0-9]+)*',
+        'air\.[a-z_]*acceleration_structure[a-z_]*(?:\.[a-z_]+)*',
+        'air\.[a-z_]*intersection_function_table[a-z_]*(?:\.[a-z0-9]+)*',
+        'air\.get_data_pointer_[a-z_]+',
+        'air\.get_instance_count_[a-z_]+',
+        'air\.projective_coordinates']
+match = ['air\.(?:instance|primitive)?_?acceleration_structure(?:_type)?',
+         'air\.[a-z_]*intersection_function_table(?:_type|_offset)?',
+         'air\.(?:accept_intersection|continue_search|intersection|bounding_box|triangle_data|curve_data|curve|curve_parameter|instancing|multi_level_instancing|world_space_data|instance_motion|primitive_motion|extended_limits|max_levels|key_frame_count|motion_start_time|motion_end_time|opaque_primitive|origin|direction|min_distance|max_distance|distance|world_space_origin|world_space_direction|object_to_world_transform|world_to_object_transform|geometry_id|primitive_data|user_instance_id|user_instance_id_count|instance_id_count|triangle|time)']
 msl = "ray tracing types and functions (2.17, 5.1.6, 6.19)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -542,8 +733,9 @@ cite = [
 
 [[family]]
 id = "function-tables-dynamic"
-match = ['air\.[a-z_]*visible_function_table(?!s)[a-z_]*', 'air\.(?:function_pointer|function_type|function_group|function_groups|dyld_flat_table|dyld_lib_table|dyld_str_table|global_binding|global_bindings)']
-kind = "function"
+stem = ['air\.[a-z_]*visible_function_table[a-z_]*']
+match = ['air\.visible_function_table(?:_type)?',
+         'air\.(?:function_pointer|function_type|function_group|function_groups|dyld_flat_table|dyld_lib_table|dyld_str_table|global_binding|global_bindings)']
 msl = "visible functions, function tables and dynamic libraries (2.15, 5.1.4, 5.9)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -556,8 +748,9 @@ cite = [
 
 [[family]]
 id = "mesh-object"
-match = ['air\.set_[a-z_]+_mesh(?:_properties)?', 'air\.(?:mesh|mesh_grid_properties|mesh_grid_properties_type|mesh_primitive_data|mesh_type|mesh_type_info|mesh_vertex_data|object|object_threadgroup_position_in_grid|payload|max_mesh_work_groups|primitive_culled|primitive_culled_attr|amplification_count|amplification_id)']
-kind = "function"
+stem = ['air\.set_[a-z_]+_mesh(?:_properties)?',
+        'air\.object_threadgroup_position_in_grid']
+match = ['air\.(?:mesh|mesh_grid_properties|mesh_grid_properties_type|mesh_primitive_data|mesh_type|mesh_type_info|mesh_vertex_data|object|payload|max_mesh_work_groups|primitive_culled|primitive_culled_attr|amplification_count|amplification_id)']
 msl = "mesh and object functions, vertex amplification (5.1.7, 5.1.8, 2.20)"
 decision = "device-unsupported"
 wgsl = "none"
@@ -569,9 +762,10 @@ cite = [
 
 [[family]]
 id = "icb-encoding"
-match = ['air\.(?:set_(?:vertex|fragment|kernel)_buffer|set_pipeline_state|set_stage_in_region|set_threadgroup_memory_length|draw_primitives|draw_indexed_primitives|dispatch_threadgroups|concurrent_dispatch_threadgroups|concurrent_dispatch_threads|reset|copy)_(?:render|compute)_command(?:\.[a-z0-9]+)*', 'air\.(?:set_barrier|clear_barrier)_compute_command',
-         'air\.(?:draw_|draw_indexed_primitives|set_vertex_buffer|set_fragment_buffer|set_kernel_buffer|set_stage_in_region_compute|get_size_command_buffer|command_buffer|command_buffer_type|indirect_command_buffer|compute_pipeline_state|compute_pipeline_state_type|render_pipeline_state|render_pipeline_state_type)']
-kind = "function"
+stem = ['air\.(?:set_(?:vertex|fragment|kernel)_buffer|set_pipeline_state|set_stage_in_region|set_threadgroup_memory_length|draw_primitives|draw_indexed_primitives|dispatch_threadgroups|concurrent_dispatch_threadgroups|concurrent_dispatch_threads|reset|copy)_(?:render|compute)_command',
+        'air\.(?:set_barrier|clear_barrier)_compute_command',
+        'air\.(?:set_stage_in_region_compute|get_size_command_buffer)']
+match = ['air\.(?:command_buffer|command_buffer_type|indirect_command_buffer|compute_pipeline_state|compute_pipeline_state_type|render_pipeline_state|render_pipeline_state_type)']
 msl = "encoding commands into indirect command buffers (6.17)"
 decision = "emulation"
 plan = "5.7 indirect command buffer row"
@@ -585,8 +779,9 @@ cite = [
 
 [[family]]
 id = "icb-encoding-unsupported"
-match = ['air\.(?:draw_patches|draw_indexed_patches)(?:_render_command)?(?:\.[a-z0-9]+)*', 'air\.(?:draw_mesh_threadgroups|draw_mesh_threads|set_mesh_buffer|set_object_buffer|set_object_threadgroup_memory_length|set_imageblock_size)_(?:render|compute)_command(?:\.[a-z0-9]+)*', 'air\.(?:set_barrier|clear_barrier)_render_command']
-kind = "function"
+stem = ['air\.(?:draw_patches|draw_indexed_patches)_render_command',
+        'air\.(?:draw_mesh_threadgroups|draw_mesh_threads|set_mesh_buffer|set_object_buffer|set_object_threadgroup_memory_length|set_imageblock_size)_(?:render|compute)_command',
+        'air\.(?:set_barrier|clear_barrier)_render_command']
 msl = "ICB commands for tessellation, mesh, imageblocks and render barriers"
 decision = "device-unsupported"
 wgsl = "none"
@@ -598,8 +793,7 @@ cite = [
 
 [[family]]
 id = "logging"
-match = ['air\.vprintf']
-kind = "function"
+stem = ['air\.vprintf']
 msl = "logging functions (6.20)"
 decision = "refusal"
 wgsl = "none"
@@ -610,13 +804,14 @@ cite = [
 
 [[family]]
 id = "opencl-front-end"
-match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:vload|vstore|vload_half|vstore_half|vloada_half|vstorea_half)(?:\.[a-z0-9]+)*', 'air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))shuffle2?(?:\.[a-z0-9]+)*',
-         'air\.(?:get_global_id|get_global_offset|get_global_size|get_group_id|get_local_id|get_local_linear_id|get_local_size|get_num_groups|get_work_dim|async_wg_copy|async_wg_strided_copy|wait_wg_events|get_null_wg_event|global_id|global_size|group_id|local_id|local_linear_id|local_size|num_groups|work_group_size|work_group_size_hint|vec_type_hint|rounding_mode|emulated_tls)']
-kind = "function"
+stem = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:vload|vstore|vload_half|vstore_half|vloada_half|vstorea_half)(?:\.[a-z0-9]+)*',
+        'air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))shuffle2?(?:\.[a-z0-9]+)*',
+        'air\.(?:get_global_id|get_global_offset|get_global_size|get_group_id|get_local_id|get_local_linear_id|get_local_size|get_num_groups|get_work_dim|async_wg_copy|async_wg_strided_copy|wait_wg_events|get_null_wg_event)']
+match = ['air\.(?:global_id|global_size|group_id|local_id|local_linear_id|local_size|num_groups|work_group_size|work_group_size_hint|vec_type_hint|rounding_mode|emulated_tls)']
 msl = "none"
 decision = "not-from-msl"
 wgsl = "none"
-reason = "OpenCL work-item, vector load/store, shuffle and async-copy entries of the shared front end; MSL defines none of them and no system metallib uses them."
+reason = "OpenCL work-item, vector load/store, shuffle and async-copy entries of the shared front end; MSL defines none of them and no system module uses them."
 cite = [
   { src = "msl", ref = "6", absent = '\b(vload|vstore|shuffle2|get_global_id|get_local_id|async_work_group_copy|wait_group_events)\w*\(' },
 ]
@@ -625,8 +820,12 @@ cite = [
 
 [[family]]
 id = "function-constants"
-match = ['air\.is_function_constant_defined', 'air\.normalize_function_constant_predicate(?:\.[a-z0-9]+)*', 'air\.function_constant', 'air\.function_constants', 'air\.function_constant_predicate_attr', 'air\.fc_initializer']
-kind = "function"
+stem = ['air\.is_function_constant_defined',
+        'air\.normalize_function_constant_predicate']
+match = ['air\.function_constant',
+         'air\.function_constants',
+         'air\.function_constant_predicate_attr',
+         'air\.fc_initializer']
 msl = "program scope function constants (5.8)"
 decision = "lowering"
 owner = "S3"
@@ -641,7 +840,6 @@ cite = [
 [[family]]
 id = "static-init"
 match = ['air\.(?:static_init|tls_static_init|external_initializations|externally_initialized|externally_defined)']
-kind = "metadata"
 msl = "program scope variables with dynamic initialization"
 decision = "lowering"
 owner = "S3"
@@ -656,7 +854,6 @@ cite = [
 [[family]]
 id = "metadata-entry-points"
 match = ['air\.(?:vertex|fragment|kernel|compile_options|version|language_version|source_file_name|requestHash|rename_qualified_function_signature|sampler_states|sampler_state|packedVertexFunction|packedFragmentFunction|vertexFetchFunction|vertexDumpFunction|emulation|disabled)']
-kind = "metadata"
 msl = "graphics and kernel entry points (5.1) and module records"
 decision = "metadata"
 owner = "S2"
@@ -671,7 +868,6 @@ cite = [
 [[family]]
 id = "metadata-compile-flags"
 match = ['air\.compile\.(?:denorms_disable|denorms_enable|fast_math_disable|fast_math_enable|framebuffer_fetch_disable|framebuffer_fetch_enable|native_double_disable)', 'air\.compile']
-kind = "metadata"
 msl = "compiler options recorded in the module (1.6)"
 decision = "metadata"
 owner = "S2"
@@ -686,7 +882,6 @@ cite = [
 [[family]]
 id = "metadata-arguments"
 match = ['air\.(?:buffer|indirect_buffer|texture|sampler|threadgroup|imageblock_data_unused|constant|byval|stage_in|vertex_input|fragment_input|vertex_output|patch_input|patch_control_point_input|indirect_argument|indirect_constant|struct_type_info|arg_name|arg_type_name|arg_type_size|arg_type_align_size|arg_unused|address_space|location|location_index|location_count|location_index_attr|read|write|read_write|read_only|write_only|buffer_size|buffer_stride|bounds_checked_buffer_type|render_target|render_target_attr|user_attr|shared|shared_attr|max_constant_buffers|max_device_buffers|max_read_write_textures|max_samplers|max_textures|max_threadgroup_buffers|max_work_group_size|control_point_index_buffer|uniform)']
-kind = "metadata"
 msl = "resource, argument and stage-interface attributes (5.2)"
 decision = "metadata"
 owner = "S2"
@@ -700,8 +895,7 @@ cite = [
 
 [[family]]
 id = "metadata-builtins"
-match = ['air\.(?:position|position_attr|point_size|point_size_attr|point_coord|clip_distance|clip_distance_attr|clip_distance_array_size|vertex_id|instance_id|base_vertex|base_instance|front_facing|sample_id|sample_mask|sample_mask_in|depth|depth_qualifier|stencil|invariant|invariant_attr|greater|less|patch_id|position_in_patch|thread_position_in_grid|thread_position_in_threadgroup|thread_index_in_threadgroup|threads_per_grid|threads_per_threadgroup|threadgroup_position_in_grid|threadgroups_per_grid|dispatch_threads_per_threadgroup|stage_in_grid_origin|stage_in_grid_size|get_stage_in_grid_origin|get_stage_in_grid_size|get_num_patch_control_points)']
-kind = "metadata"
+match = ['air\.(?:position|position_attr|point_size|point_size_attr|point_coord|clip_distance|clip_distance_attr|clip_distance_array_size|vertex_id|instance_id|base_vertex|base_instance|front_facing|sample_id|sample_mask|sample_mask_in|depth|depth_qualifier|stencil|invariant|invariant_attr|any|greater|less|patch_id|position_in_patch|thread_position_in_grid|thread_position_in_threadgroup|thread_index_in_threadgroup|threads_per_grid|threads_per_threadgroup|threadgroup_position_in_grid|threadgroups_per_grid|dispatch_threads_per_threadgroup|stage_in_grid_origin|stage_in_grid_size)']
 msl = "built-in input and output attributes (5.2.3)"
 decision = "metadata"
 owner = "S6b"
@@ -717,7 +911,6 @@ cite = [
 [[family]]
 id = "metadata-interpolation"
 match = ['air\.(?:center|centroid|sample|flat|perspective|no_perspective)']
-kind = "metadata"
 msl = "sampling and interpolation attributes (5.4)"
 decision = "metadata"
 owner = "S6b"
@@ -730,10 +923,10 @@ cite = [
 ]
 
 [[family]]
-id = "metadata-tessellation"
+id = "tessellation"
+stem = ['air\.get_num_patch_control_points']
 match = ['air\.(?:patch|patch_control_point|patch_control_point_function|patch_control_point_type)']
-kind = "metadata"
-msl = "post-tessellation vertex functions (5.1.1.1)"
+msl = "post-tessellation vertex functions (5.1.1.1) and their patch_control_point<T> inputs (5.2.2)"
 decision = "emulation"
 plan = "5.7 tessellation row (package S6e)"
 wgsl = "none"
@@ -741,13 +934,13 @@ reason = "Tessellation is on the A10X's family; WebGPU has none. LOUD at pipelin
 cite = [
   { src = "mfst", quote = "Tessellation Metal 3 Apple3" },
   { src = "msl", ref = "5.1.1.1", quote = "5.1.1.1 Post-Tessellation Vertex Functions" },
+  { src = "msl", ref = "5.2.2", quote = "constexpr size_t size() const;, which returns the number of control-points in the patch." },
 ]
 
 [[family]]
 id = "metadata-types"
 match = ['air\.(?:(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)|void|bool|char|uchar|short|ushort|int|uint|long|ulong|llong|ullong|half|float|matrix|pointer|lvalue_reference|rvalue_reference|array|struct|sampler|vector|packed_vector|opaque|enum|union|unknown|array_of|array_ref_of|r8unorm|r8snorm|r16unorm|r16snorm|rg8unorm|rg8snorm|rg16unorm|rg16snorm|rgba8unorm|rgba8snorm|rgba16unorm|rgba16snorm|srgba8unorm|rgb10a2|rg11b10f|rgb9e5)_type',
          'air\.(?:struct_type|array_type|vector_type|pointer_type|matrix_type|record_base|record_field)']
-kind = "metadata"
 msl = "argument and reflection type descriptions; pixel data types (2.7)"
 decision = "metadata"
 owner = "S2"
@@ -760,7 +953,6 @@ cite = [
 [[family]]
 id = "unattributed"
 match = ['air\.(?:add|point|line)']
-kind = "metadata"
 msl = "none"
 decision = "open"
 wgsl = "none"
@@ -772,7 +964,6 @@ cite = [
 [[family]]
 id = "metadata-coreimage"
 match = ['air\.ci(?:_(?:array|builtin|matrix|padding|pointer|sampler|struct|texture))?']
-kind = "metadata"
 msl = "none published (CoreImage kernel records)"
 decision = "open"
 wgsl = "none"
@@ -784,7 +975,6 @@ cite = [
 [[family]]
 id = "builtins-above-family"
 match = ['air\.(?:barycentric_coord|primitive_id|primitive_id_attr|render_target_array_index|render_target_array_index_attr|viewport_array_index|viewport_array_index_attr)']
-kind = "metadata"
 msl = "barycentric coordinates, primitive id, layered rendering and viewport selection attributes (5.2.3)"
 decision = "device-unsupported"
 wgsl = "none needed on the target"
@@ -799,7 +989,6 @@ cite = [
 [[family]]
 id = "simdgroup-attributes"
 match = ['air\.(?:threads_per_simdgroup|thread_index_in_simdgroup|simdgroup_index_in_threadgroup|simdgroups_per_threadgroup|threads_per_quadgroup|thread_index_in_quadgroup|quadgroup_index_in_threadgroup|quadgroups_per_threadgroup|thread_execution_width|simdgroup_size|dispatch_simdgroups_per_threadgroup|dispatch_quadgroups_per_threadgroup)']
-kind = "metadata"
 msl = "SIMD-group and quad-group index attributes (5.2.3.6)"
 decision = "open"
 wgsl = "subgroup_size and subgroup_invocation_id need the subgroups feature and report the host's subgroup size"
@@ -814,7 +1003,6 @@ cite = [
 [[family]]
 id = "visible-stitchable"
 match = ['air\.(?:visible|visible_input|visible_output|visible_padding|visible_function_reference|visible_function_references|signature|module_signature|linked_constants_signature|stitching_argument|stitching_info|stitching_type)']
-kind = "metadata"
 msl = "visible and stitchable functions (5.1.4, 5.1.5)"
 decision = "lowering"
 owner = "S3"
