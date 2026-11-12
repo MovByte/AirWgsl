@@ -88,6 +88,31 @@ fn sroa_splits_and_promotes_what_constant_offsets_reach() {
 }
 
 #[test]
+fn sroa_moves_the_promises_of_split_copies() {
+    let m = fixture(include_bytes!("ir/sroa_attrs.bc"));
+    let c = canon(&m, &[]);
+    // The copy is split into the two fields' pieces; neither keeps the whole copy's dereferenceability, and the one
+    // 68 bytes in is aligned to 4 only.
+    let f = &c.module.functions[c.function];
+    let mut aligns = Vec::new();
+    for o in ops(&c) {
+        if let Op::Call { attrs, .. } = o {
+            for k in 0..2 {
+                let set = c.module.attrs(attrs.param(k));
+                assert!(!set.has(airwgsl::ir::AttrKind::Dereferenceable) && !set.has(airwgsl::ir::AttrKind::NonNull));
+                if let Some(airwgsl::ir::Attribute::Int(_, a)) = set.get(airwgsl::ir::AttrKind::Alignment) {
+                    aligns.push(*a);
+                }
+            }
+        }
+    }
+    assert_eq!(f.blocks.len(), 1);
+    aligns.sort();
+    assert_eq!(aligns, vec![4, 4, 16, 16]);
+    check_refines(&m, &c, &[], 8);
+}
+
+#[test]
 fn folding_uses_exact_semantics_only() {
     let m = fixture(include_bytes!("ir/fold.bc"));
     let c = canon(&m, &[]);

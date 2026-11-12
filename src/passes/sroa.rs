@@ -20,7 +20,7 @@ use std::collections::HashSet;
 
 use crate::api::Refusal;
 use crate::ir::layout::DataLayout;
-use crate::ir::{GepFlags, GlobalId, InstId, Module, Op, Type, TypeId, Value};
+use crate::ir::{AttrKind, AttrSetId, Attribute, GepFlags, GlobalId, InstId, Module, Op, Type, TypeId, Value};
 
 use super::util::{const_int, int_const, new_inst};
 
@@ -381,6 +381,25 @@ fn rewrite(m: &mut Module, dl: &DataLayout, f: usize, a: InstId, plan: Plan) {
                     let objp = ptr_at(m, *inst, s0, base, lo, ptr_type_of_value(m, f, args[side]));
                     let mut nargs = args.clone();
                     nargs[side] = objp;
+                    // The call-site attributes of the pointers that moved: the object's side points into the new
+                    // object, the other side `s0 - off` bytes further.
+                    let mut attrs = match &m.functions[f].inst(*inst).op {
+                        Op::Call { attrs, .. } => attrs.clone(),
+                        _ => unreachable!(),
+                    };
+                    let obj_align = part_align(part_align(plan.align, lo), s0 - lo);
+                    let set = moved_param(m, attrs.param(side), obj_align);
+                    set_param(&mut attrs, side, set);
+                    if other.is_some() && s0 > *off {
+                        let k = s0 - off;
+                        let set = attrs.param(1 - side);
+                        let known = match m.attrs(set).get(AttrKind::Alignment) {
+                            Some(Attribute::Int(_, al)) => part_align(*al, k),
+                            _ => 1,
+                        };
+                        let set = moved_param(m, set, known);
+                        set_param(&mut attrs, 1 - side, set);
+                    }
                     if let Some(o) = other {
                         let oty = ptr_type_of_value(m, f, o);
                         let k = s0 - off;
@@ -399,8 +418,9 @@ fn rewrite(m: &mut Module, dl: &DataLayout, f: usize, a: InstId, plan: Plan) {
                     }
                     nargs[2] = int_const(m, len_ty, (s1 - s0) as u128);
                     let mut op = m.functions[f].inst(*inst).op.clone();
-                    if let Op::Call { args, .. } = &mut op {
+                    if let Op::Call { args, attrs: a, .. } = &mut op {
                         *args = nargs;
+                        *a = attrs;
                     }
                     let void = m.functions[f].inst(*inst).ty;
                     let c = new_inst(&mut m.functions[f], void, op);
@@ -411,6 +431,29 @@ fn rewrite(m: &mut Module, dl: &DataLayout, f: usize, a: InstId, plan: Plan) {
             Slice::Marker(i) => super::util::remove_inst(&mut m.functions[f], *i),
         }
     }
+}
+
+/// A pointer parameter's call-site attributes once the pointer has moved to another place known to be aligned to
+/// `align` bytes: an `align` it had becomes at most `align`, and `dereferenceable`, `dereferenceable_or_null` and
+/// `nonnull`, which described the old pointer, go (LangRef "Parameter Attributes"; dropping a promise only removes
+/// undefined behavior).
+fn moved_param(m: &mut Module, set: AttrSetId, align: u64) -> AttrSetId {
+    let mut a = m.attrs(set).clone();
+    for k in [AttrKind::Dereferenceable, AttrKind::DereferenceableOrNull, AttrKind::NonNull] {
+        a.remove(k);
+    }
+    if let Some(Attribute::Int(_, old)) = a.get(AttrKind::Alignment).cloned() {
+        a.add(Attribute::Int(AttrKind::Alignment, old.min(align)));
+    }
+    m.attr_set(a)
+}
+
+fn set_param(attrs: &mut crate::ir::AttrList, k: usize, set: AttrSetId) {
+    if attrs.params.len() <= k {
+        attrs.params.resize(k + 1, AttrSetId::EMPTY);
+    }
+    attrs.params[k] = set;
+    attrs.trim();
 }
 
 /// Whether pointer `v` is the object `a` or derived from it.
