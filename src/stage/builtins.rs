@@ -46,6 +46,49 @@ pub fn thread_index(cx: &mut dyn StageCx, arg: u32) -> R<String> {
     }
 }
 
+/// `[[thread_position_in_grid]]` and `[[thread_position_in_threadgroup]]` of a kernel (MSL 5.2.3.6: the position in
+/// the grid is the threadgroup's position times the threadgroup size plus the position in the threadgroup). In a
+/// dimension where the pipeline variant's threadgroup size is 1, the position in the threadgroup is 0 and the position
+/// in the grid is the threadgroup's position, so those components are WGSL's `workgroup_id` and the constant 0
+/// (WGSL 13.3.1.1 defines global_invocation_id the same way): the values are the same, and WGSL's uniformity analysis
+/// sees that they are uniform across the workgroup, which barriers under branches on them need.
+pub fn kernel_position(cx: &mut dyn StageCx, arg: u32, record: &Argument) -> R<String> {
+    let key = crate::wgsl::io::role_key(&record.role);
+    let ws = match &cx.desc().kind {
+        PipelineKind::Compute(c) => c.threads_per_threadgroup,
+        _ => unreachable!("a kernel is lowered in a compute pipeline"),
+    };
+    let grid = key == "air.thread_position_in_grid";
+    let lanes: Vec<String> = (0..3)
+        .map(|d| {
+            let c = ["x", "y", "z"][d];
+            match (ws[d] == 1, grid) {
+                (true, true) => format!("{}.{}", cx.builtin("workgroup_id", "vec3<u32>"), c),
+                (true, false) => "0u".to_string(),
+                (false, true) => format!("{}.{}", cx.builtin("global_invocation_id", "vec3<u32>"), c),
+                (false, false) => format!("{}.{}", cx.builtin("local_invocation_id", "vec3<u32>"), c),
+            }
+        })
+        .collect();
+    let fi = cx.function();
+    let t = cx.module().functions[fi].args[arg as usize].ty;
+    let (n, bits) = match cx.module().types.get(t) {
+        crate::ir::Type::Vector { len, elem, .. } => (*len as usize, cx.module().types.int_bits(*elem)),
+        _ => (1, cx.module().types.int_bits(t)),
+    };
+    if n > 3 || !matches!(bits, Some(16 | 32)) {
+        return Err(tracked::refuse("stage-builtin", key, loc(cx.module(), fi), "an unexpected type for the built-in"));
+    }
+    let lanes: Vec<String> =
+        lanes[..n].iter().map(|x| if bits == Some(16) { format!("({} & 0xffffu)", x) } else { x.clone() }).collect();
+    if n == 1 {
+        return Ok(lanes[0].clone());
+    }
+    // A lane a branch reads keeps its own uniformity (the workgroup_id lanes are uniform).
+    cx.argument_lanes(arg, lanes.clone());
+    Ok(format!("vec{}<u32>({})", n, lanes.join(", ")))
+}
+
 /// The refusal for `[[point_coord]]`: the position inside a point needs the point expansion.
 pub fn point_coord(cx: &mut dyn StageCx) -> Refusal {
     tracked::refuse(

@@ -75,6 +75,8 @@ pub struct Interface {
     pub features: Vec<String>,
     /// Module-scope items stage rules declared, by key.
     pub module_items: BTreeMap<String, String>,
+    /// Vector arguments whose lanes stage rules gave as separate expressions.
+    pub argument_lanes: HashMap<u32, Vec<String>>,
 }
 
 /// The record key an argument's role comes from, which stage rules and resource rules claim kinds by.
@@ -1021,6 +1023,10 @@ impl super::hooks::StageCx for StageCtx<'_, '_> {
 
     fn prologue(&mut self, statement: String) {
         self.it.prologue.push(statement);
+    }
+
+    fn argument_lanes(&mut self, arg: u32, lanes: Vec<String>) {
+        self.it.argument_lanes.insert(arg, lanes);
     }
 
     fn module_item(&mut self, key: &str, text: String) {

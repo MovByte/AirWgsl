@@ -172,6 +172,10 @@ pub trait StageCx {
     fn module_item(&mut self, key: &str, text: String);
     /// A WGSL `enable` directive the code needs.
     fn enable(&mut self, extension: &str);
+    /// The lanes of vector argument `arg` as separate expressions (each in its lane's carrier, valid anywhere in the
+    /// entry function): a use of one lane reads its expression instead of the vector, so that each lane keeps its own
+    /// uniformity for WGSL's analysis.
+    fn argument_lanes(&mut self, arg: u32, lanes: Vec<String>);
 }
 
 /// How a returned value becomes a stage output.

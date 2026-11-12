@@ -6,7 +6,7 @@
 //! - [`fragment`]: color outputs against the pipeline's attachment formats, dual-source outputs, the coverage mask,
 //!   `discard_fragment`, the sample count and positions, and early fragment tests.
 //! - [`builtins`]: built-in values that need more than a direct mapping (the stage-in region, the linear thread index
-//!   of a 3D threadgroup, point size).
+//!   of a 3D threadgroup, thread positions in dimensions of threadgroup size 1, point size).
 //!
 //! The lowerings register as a [`StageRule`] (asked before the direct mappings) and a
 //! [`CallRule`](crate::wgsl::hooks::CallRule) ([`register`]). What has no exact lowering is refused with its tracked
@@ -104,6 +104,8 @@ impl StageRule for Stage {
                         | "air.stage_in_grid_origin"
                         | "air.stage_in_grid_size"
                         | "air.thread_index_in_threadgroup"
+                        | "air.thread_position_in_grid"
+                        | "air.thread_position_in_threadgroup"
                 )
                 | (MetalStage::Fragment, "air.sample_mask_in" | "air.point_coord")
         )
@@ -115,6 +117,9 @@ impl StageRule for Stage {
             "air.stage_in" => fetch::stage_in(cx, arg, record),
             "air.stage_in_grid_origin" | "air.stage_in_grid_size" => builtins::stage_in_region(cx, arg, record),
             "air.thread_index_in_threadgroup" => builtins::thread_index(cx, arg),
+            "air.thread_position_in_grid" | "air.thread_position_in_threadgroup" => {
+                builtins::kernel_position(cx, arg, record)
+            }
             "air.sample_mask_in" => fragment::sample_mask_in(cx, arg),
             "air.point_coord" => Err(builtins::point_coord(cx)),
             other => unreachable!("{} is not claimed", other),

@@ -300,3 +300,63 @@ fn linear_thread_index_of_a_3d_threadgroup() {
         eprintln!("thread index {:?}: wgpu{} = Metal", threads, if dawn { " = Dawn" } else { "" });
     }
 }
+
+const ROWS: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+kernel void rows(device uint *o [[buffer(0)]], constant uint &n [[buffer(1)]], threadgroup uint *t [[threadgroup(0)]],
+                 uint3 gid [[thread_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+    if (gid.y < n) {
+        t[lid.x] = gid.x * 3u + gid.y + lid.y;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        o[gid.y * 16u + gid.x] = t[(lid.x + 1u) % 8u];
+    }
+}
+"#;
+
+/// In a dimension where the variant's threadgroup size is 1, the thread position in the grid is the threadgroup's
+/// position and the position in the threadgroup is 0: emitted that way, a barrier under a branch on them is uniform
+/// for WGSL, and the results equal real Metal's. With a threadgroup size above 1 in that dimension the branch is not
+/// uniform and the barrier is refused.
+#[test]
+fn thread_positions_in_dimensions_of_size_1() {
+    let dir = case_dir("rows");
+    let bc = air(&dir, ROWS, "metal3.1");
+    let desc = |threads: [u64; 3]| PipelineDesc {
+        kind: PipelineKind::Compute(ComputeState {
+            threads_per_threadgroup: threads,
+            non_uniform_grid: false,
+            threadgroup_memory_lengths: vec![32],
+            stage_input: None,
+        }),
+        bindings: Vec::new(),
+    };
+    let e = compile(&[module(&bc, "rows", 3)], &desc([8, 2, 1]), &host()).unwrap_err();
+    assert_eq!(item(&e), "barrier-uniformity", "{}", e);
+    let c = compile(&[module(&bc, "rows", 3)], &desc([8, 1, 1]), &host()).unwrap_or_else(|e| panic!("{}", e));
+    validate(&c.wgsl[0].source);
+    let out = vec![0xa5u8; 16 * 16 * 4];
+    let n = 5u32.to_le_bytes().to_vec();
+    let slots = [
+        Slot { stage: MetalStage::Kernel, index: 0, data: out.clone(), offset: 0 },
+        Slot { stage: MetalStage::Kernel, index: 1, data: n.clone(), offset: 0 },
+    ];
+    let (w, dawn) = dispatch("rows", &c, [2, 8, 1], &slots, None);
+    let runner = tmp_dir().join("metal_run");
+    if !runner.exists() {
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/wgsl/metal_run.swift");
+        let o = Command::new("swiftc").args(["-O", "-o"]).arg(&runner).arg(&src).output().unwrap();
+        assert!(o.status.success(), "swiftc: {}", String::from_utf8_lossy(&o.stderr));
+    }
+    let src = dir.join("rows.metal");
+    std::fs::write(&src, ROWS).unwrap();
+    let (b0, b1) = (dir.join("b0.bin"), dir.join("b1.bin"));
+    std::fs::write(&b0, &out).unwrap();
+    std::fs::write(&b1, &n).unwrap();
+    let o =
+        Command::new(&runner).arg(&src).arg("rows").args(["8,1,1", "2,8,1", "32"]).arg(&b0).arg(&b1).output().unwrap();
+    assert!(o.status.success(), "metal_run: {}", String::from_utf8_lossy(&o.stderr));
+    let metal = std::fs::read(dir.join("b0.bin.out")).unwrap();
+    assert_eq!(first_difference(&w[0], &metal), None, "rows differ from Metal");
+    eprintln!("thread positions in dimensions of size 1: wgpu{} = Metal", if dawn { " = Dawn" } else { "" });
+}

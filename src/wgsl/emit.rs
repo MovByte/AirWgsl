@@ -548,6 +548,18 @@ impl<'a> FnEmit<'a> {
     }
 
     /// The WGSL expression of an operand in its carrier.
+    /// Lane `k` of vector value `v` (whose expression is `e`): the lane's own expression for an argument a stage rule
+    /// gave by lanes, otherwise an index of the vector.
+    fn arg_lane(&self, v: Value, e: &str, k: usize) -> String {
+        match v {
+            Value::Arg(a) => match self.iface.argument_lanes.get(&a).and_then(|l| l.get(k)) {
+                Some(l) => l.clone(),
+                None => format!("{}[{}]", e, k),
+            },
+            _ => format!("{}[{}]", e, k),
+        }
+    }
+
     pub fn operand(&mut self, v: Value) -> R<String> {
         match v {
             Value::Inst(i) => Ok(format!("v{}", i.0)),
@@ -1004,7 +1016,7 @@ impl<'a> FnEmit<'a> {
                 let v = self.operand(*vec)?;
                 let e = match self.const_int(*idx) {
                     Some(k) if k >= n as u64 => self.types.zero(&self.m.types, t)?,
-                    Some(k) => format!("{}[{}]", v, k),
+                    Some(k) => self.arg_lane(*vec, &v, k as usize),
                     None => format!("{}[{}]", v, self.index_u32(*idx)?),
                 };
                 self.def(i, e)
@@ -1043,9 +1055,9 @@ impl<'a> FnEmit<'a> {
                         if k < 0 {
                             zero.clone()
                         } else if (k as u32) < n {
-                            format!("{}[{}]", ea, k)
+                            self.arg_lane(*a, &ea, k as usize)
                         } else {
-                            format!("{}[{}]", eb, k as u32 - n)
+                            self.arg_lane(*b, &eb, k as usize - n as usize)
                         }
                     })
                     .collect();
