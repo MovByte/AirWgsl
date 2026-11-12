@@ -59,6 +59,7 @@ pub struct TexIn {
     pub swizzle: [u8; 4],
     /// The function writes the texture; its level 0 is read back and compared.
     pub write: bool,
+    pub samples: u32,
 }
 
 impl TexIn {
@@ -77,6 +78,7 @@ impl TexIn {
             data,
             swizzle: [2, 3, 4, 5],
             write: false,
+            samples: 1,
         }
     }
 
@@ -94,7 +96,7 @@ impl TexIn {
             index: self.index,
             texture_type: self.ty,
             pixel_format: self.format,
-            sample_count: 1,
+            sample_count: self.samples as u64,
             swizzle: self.swizzle,
         }
     }
@@ -616,6 +618,113 @@ fn layout_json(r: &BindingResource) -> String {
             view_name(*view_dimension)
         ),
     }
+}
+
+/// Create the compiled layout's bind group layouts, the pipeline, and a bind group of textures and samplers as the
+/// case binds them (multisampled textures are created as render attachments and not uploaded), under a validation
+/// error scope: the WebGPU validation of layouts (WebGPU 8.1.1) and bind groups (8.3.1). Returns the first error.
+pub fn validate_bindings(c: &Case<'_>, compiled: &Compiled) -> Option<String> {
+    let _guard = RUN.lock().unwrap_or_else(|e| e.into_inner());
+    let g = gpu();
+    let d = &g.device;
+    let scope = d.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(compiled.wgsl[0].source.as_str().into()),
+    });
+    let ngroups = compiled.layout.groups.iter().map(|g| g.group + 1).max().unwrap_or(0);
+    let bgls: Vec<wgpu::BindGroupLayout> = (0..ngroups)
+        .map(|gi| {
+            let entries: Vec<wgpu::BindGroupLayoutEntry> = compiled
+                .layout
+                .groups
+                .iter()
+                .filter(|g| g.group == gi)
+                .flat_map(|g| g.entries.iter())
+                .map(|e| wgpu::BindGroupLayoutEntry {
+                    binding: e.binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: binding_type(&e.resource),
+                    count: None,
+                })
+                .collect();
+            d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &entries })
+        })
+        .collect();
+    let refs: Vec<Option<&wgpu::BindGroupLayout>> = bgls.iter().map(Some).collect();
+    let pl = d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &refs,
+        immediate_size: 0,
+    });
+    let _pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&pl),
+        module: &module,
+        entry_point: Some(&compiled.wgsl[0].entry_point),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let mut views = Vec::new();
+    let mut samplers = Vec::new();
+    for grp in &compiled.layout.groups {
+        for e in &grp.entries {
+            match (&e.source, &e.resource) {
+                (BindingSource::MetalTexture { index, .. }, BindingResource::Texture { view_dimension, .. }) => {
+                    let t = c.textures.iter().find(|t| t.index == *index).expect("a bound texture");
+                    let stored = airwgsl::tex::format::stored(t.format, &host()).unwrap();
+                    let mut usage = wgpu::TextureUsages::TEXTURE_BINDING;
+                    if t.samples > 1 {
+                        usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+                    }
+                    let size = t.size();
+                    let tex = d.create_texture(&wgpu::TextureDescriptor {
+                        label: None,
+                        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: size[2] },
+                        mip_level_count: t.levels,
+                        sample_count: t.samples,
+                        dimension: if t.ty == 7 { wgpu::TextureDimension::D3 } else { wgpu::TextureDimension::D2 },
+                        format: wgpu_format(stored.webgpu),
+                        usage,
+                        view_formats: &[],
+                    });
+                    let v = tex.create_view(&wgpu::TextureViewDescriptor {
+                        dimension: Some(wgpu_view(view_name(*view_dimension))),
+                        ..Default::default()
+                    });
+                    views.push((grp.group, e.binding, v));
+                }
+                (BindingSource::MetalSampler { .. } | BindingSource::ConstantSampler { .. }, r) => {
+                    let BindingResource::Sampler { ty } = r else { continue };
+                    let s = d.create_sampler(&wgpu::SamplerDescriptor {
+                        compare: (*ty == SamplerBindingType::Comparison).then_some(wgpu::CompareFunction::Less),
+                        ..Default::default()
+                    });
+                    samplers.push((grp.group, e.binding, s));
+                }
+                _ => {}
+            }
+        }
+    }
+    for (gi, bgl) in bgls.iter().enumerate() {
+        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
+        for (grp, b, v) in &views {
+            if *grp as usize == gi {
+                entries.push(wgpu::BindGroupEntry { binding: *b, resource: wgpu::BindingResource::TextureView(v) });
+            }
+        }
+        for (grp, b, s) in &samplers {
+            if *grp as usize == gi {
+                entries.push(wgpu::BindGroupEntry { binding: *b, resource: wgpu::BindingResource::Sampler(s) });
+            }
+        }
+        if entries.len()
+            == compiled.layout.groups.iter().filter(|g| g.group as usize == gi).map(|g| g.entries.len()).sum::<usize>()
+        {
+            let _ = d.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: bgl, entries: &entries });
+        }
+    }
+    pollster::block_on(scope.pop()).map(|e| e.to_string())
 }
 
 pub fn run_wgpu(c: &Case<'_>, compiled: &Compiled, plan: &[(u32, u32, Bind)]) -> Vec<Vec<u8>> {

@@ -215,8 +215,14 @@ fn bind(cx: &mut dyn RuleCx, n: &Name, t: &Tex, c: &str) -> R<String> {
         return bind_texture(cx, t, View::Storage(sampled_dim(n.dim, true), fmt));
     }
     let texel = n.dim == Dim::Cube && uses(cx, Some(t.arg), None).texel;
-    let st = sample_type(cx, t, n.depth);
-    bind_texture(cx, t, View::Sampled(sampled_dim(n.dim, texel), st, n.dim == Dim::D2Ms))
+    let ms = n.dim == Dim::D2Ms;
+    let mut st = sample_type(cx, t, n.depth);
+    // WebGPU 8.1.1: a multisampled texture binding's sample type is not "float" (a multisampled texture is never
+    // filtered); its float texels are bound as "unfilterable-float".
+    if ms && st == S::Float {
+        st = S::UnfilterableFloat;
+    }
+    bind_texture(cx, t, View::Sampled(sampled_dim(n.dim, texel), st, ms))
 }
 
 // Queries ---------------------------------------------------------------------------------------------------------

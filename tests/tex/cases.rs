@@ -649,3 +649,72 @@ fn srgb_bound(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<String> {
     }
     None
 }
+
+const LAYOUTS: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+kernel void ms(texture2d_ms<float, access::read> t [[texture(0)]], device float4 *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.read(uint2(i, 0), i & 3) + float(t.get_num_samples()); }
+kernel void msu(texture2d_ms<uint, access::read> t [[texture(0)]], device uint4 *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.read(uint2(i, 0), i & 3); }
+kernel void dms(depth2d_ms<float, access::read> t [[texture(0)]], device float *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.read(uint2(i, 0), i & 3); }
+kernel void d(depth2d<float> t [[texture(0)]], sampler s [[sampler(0)]], device float *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.sample(s, float2(i)) + t.read(uint2(i, 0)) + t.gather(s, float2(i)).x; }
+kernel void dc(depthcube<float> t [[texture(0)]], sampler s [[sampler(0)]], device float *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.sample_compare(s, float3(1, 0, 0), 0.5) + t.get_width(); }
+kernel void ddf(texture2d<float, access::read> t [[texture(0)]], device float4 *o [[buffer(0)]], uint i [[thread_position_in_grid]])
+{ o[i] = t.read(uint2(i, 0)); }
+"#;
+
+/// The compiled layouts of multisampled and depth textures (null, and bound with formats of each class) pass WebGPU's
+/// validation of bind group layouts and bind groups (WebGPU 8.1.1, 8.3.1): a multisampled float binding is
+/// "unfilterable-float", never "float", and depth formats bind as "depth" or, through float textures,
+/// "unfilterable-float".
+#[test]
+fn multisampled_and_depth_layouts_are_valid() {
+    let dir = case_dir("layouts");
+    let bc = air(&dir, LAYOUTS, &[]);
+    let ms = |format: u64| {
+        let mut t = TexIn::new(0, 4, format, [4, 4, 1], 1, 4, Vec::new());
+        t.samples = 4;
+        t
+    };
+    let cases: Vec<(&str, Vec<TexIn>, Vec<SamplerSlot>)> = vec![
+        ("ms", vec![], vec![]),
+        ("ms", vec![ms(70)], vec![]),
+        ("ms", vec![ms(115)], vec![]),
+        ("ms", vec![ms(55)], vec![]),
+        ("ms", vec![ms(252)], vec![]),
+        ("msu", vec![], vec![]),
+        ("msu", vec![ms(73)], vec![]),
+        ("dms", vec![], vec![]),
+        ("dms", vec![ms(252)], vec![]),
+        ("d", vec![TexIn::new(0, 2, 252, [4, 4, 1], 1, 4, Vec::new())], vec![]),
+        ("dc", vec![TexIn::new(0, 5, 250, [4, 4, 1], 1, 2, Vec::new())], vec![sampler(0, 1, 0, [0, 0, 0], true, 1)]),
+        ("ddf", vec![TexIn::new(0, 2, 252, [4, 4, 1], 1, 4, Vec::new())], vec![]),
+        ("ddf", vec![TexIn::new(0, 2, 250, [4, 4, 1], 1, 2, Vec::new())], vec![]),
+    ];
+    for (f, textures, samplers) in cases {
+        let mut c = Case::new("layouts", LAYOUTS, f);
+        c.buffers = vec![vec![0; 64]];
+        let bound = !textures.is_empty();
+        c.textures = textures;
+        c.samplers = samplers;
+        if !bound {
+            // Null textures: the layout alone is validated.
+            c.nulls = vec![0];
+        }
+        let compiled = compile_case(&c, &bc).unwrap_or_else(|r| panic!("{}: {}", f, r));
+        for g in &compiled.layout.groups {
+            for e in &g.entries {
+                if let airwgsl::api::BindingResource::Texture { sample_type, multisampled: true, .. } = &e.resource {
+                    assert_ne!(*sample_type, airwgsl::api::TextureSampleType::Float, "{}: {:?}", f, e);
+                }
+            }
+        }
+        if bound && let Some(e) = validate_bindings(&c, &compiled) {
+            panic!("{} ({} bound): WebGPU validation: {}\n{}", f, c.textures[0].format, e, compiled.wgsl[0].source);
+        }
+    }
+}
