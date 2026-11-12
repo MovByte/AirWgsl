@@ -216,3 +216,60 @@ fn threadgroup_memory_without_barriers() {
     let out = vec![0xa5u8; n * 4];
     differential("tg", &format!("{}{}", HEAD, THREADGROUP), "tg", [64, 1, 1], [4, 1, 1], &[256], &[a, out]);
 }
+
+const POINTERS: &str = r#"
+struct Pair {
+    uint a;
+    uchar b[6];
+};
+
+kernel void pointers(device const uint* a [[buffer(0)]], device const uint* b [[buffer(1)]], device uint* out [[buffer(2)]],
+                     device Pair* pairs [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+    uint x = a[i];
+    // A pointer into one of two buffers, chosen at run time.
+    device const uint* p = (x & 1u) ? a : b;
+    uint v = p[(i + 3u) % 64u];
+    // Pointers into one of two private arrays.
+    uint u[8] = {};
+    uint w[8];
+    for (uint k = 0; k < 8; k++) {
+        w[k] = x ^ k;
+    }
+    thread uint* q = (x & 2u) ? u : w;
+    q[x % 8u] += 5u;
+    uint s = 0;
+    for (uint k = 0; k < 8; k++) {
+        s = s * 31u + u[k] + w[k] * 3u;
+    }
+    // Whole-struct copies (memcpy) and a zeroed struct (memset) through device memory.
+    Pair z = {};
+    z.b[x % 6u] = uchar(x);
+    pairs[i] = z;
+    Pair t = pairs[i];
+    t.a = t.a * 3u + x;
+    if ((x & 4u) != 0u) {
+        pairs[i] = t;
+    }
+    // The address's low bits: alignment is preserved.
+    ulong addr = ulong(reinterpret_cast<ulong>(p + (x & 3u)));
+    out[i] = v + s + uint(addr & 3ul) * 1000u;
+}
+"#;
+
+#[test]
+fn pointer_selection_and_copies() {
+    let n = 64;
+    let a = bytes(19, n * 4);
+    let b = bytes(23, n * 4);
+    let out = vec![0xa5u8; n * 4];
+    let pairs = vec![0x5au8; n * 12];
+    differential(
+        "pointers",
+        &format!("{}{}", HEAD, POINTERS),
+        "pointers",
+        [64, 1, 1],
+        [1, 1, 1],
+        &[],
+        &[a, b, out, pairs],
+    );
+}

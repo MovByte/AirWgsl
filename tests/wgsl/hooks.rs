@@ -81,3 +81,75 @@ fn a_registered_rule_lowers_its_calls_and_makes_the_region_atomic() {
         }
     }
 }
+
+/// A rule for this test only: the width of a 2D texture, through a binding the rule asks the layout for.
+struct TextureWidth;
+
+impl CallRule for TextureWidth {
+    fn handles(&self, name: &str) -> bool {
+        name == "air.get_width_texture_2d"
+    }
+
+    fn claims_argument(&self, kind: &str) -> bool {
+        kind == "air.texture"
+    }
+
+    fn lower(&self, cx: &mut dyn RuleCx, call: &CallSite<'_>) -> Result<Option<String>, Refusal> {
+        let arg = cx.handle_arg(call.args[0]).expect("a texture argument");
+        let index = cx.arg_record(arg).and_then(|r| r.int_after("air.location_index", 0)).expect("a texture index");
+        let t = cx.resource(
+            BindingResource::Texture {
+                sample_type: TextureSampleType::Float,
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            BindingSource::MetalTexture { stage: MetalStage::Kernel, index },
+            "texture_2d<f32>",
+        )?;
+        let lod = cx.operand(call.args[1])?;
+        Ok(Some(format!("textureDimensions({}, {}).x", t, lod)))
+    }
+}
+
+const TEXTURE: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void width(texture2d<float> t [[texture(3)]], device uint* out [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    out[i] = t.get_width(0) + i;
+}
+"#;
+
+#[test]
+fn a_rule_binds_a_resource_and_claims_its_argument() {
+    let dir = case_dir("hooks-texture");
+    let bc = air(&dir, TEXTURE);
+    let m = AirModule {
+        hash: [0; 32],
+        bitcode: Arc::from(&bc[..]),
+        entry: Some(EntryPoint { function: "width".into(), function_type: 3, constants: Vec::new() }),
+    };
+    let desc = PipelineDesc {
+        kind: PipelineKind::Compute(ComputeState {
+            threads_per_threadgroup: [64, 1, 1],
+            non_uniform_grid: false,
+            threadgroup_memory_lengths: Vec::new(),
+            stage_input: None,
+        }),
+        bindings: Vec::new(),
+    };
+    let r = compile(std::slice::from_ref(&m), &desc, &HostCaps::default()).unwrap_err();
+    assert!(r.reason.starts_with("[compiler:resource-argument]"), "{}", r);
+    let rules = Rules::new().with(Box::new(TextureWidth));
+    let c = airwgsl::wgsl::compile_with(&[m], &desc, &HostCaps::default(), &rules, &Rounding::SoftFloat).unwrap();
+    let src = &c.wgsl[0].source;
+    assert!(src.contains("var aw_tk3: texture_2d<f32>;"), "{}", src);
+    let module = naga::front::wgsl::parse_str(src).unwrap();
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+        .validate(&module)
+        .unwrap();
+    let group = c.layout.groups.iter().find(|g| g.group == 1).unwrap();
+    assert!(
+        group.entries.iter().any(|e| e.source == BindingSource::MetalTexture { stage: MetalStage::Kernel, index: 3 })
+    );
+}
