@@ -928,6 +928,19 @@ impl super::hooks::StageCx for StageCtx<'_, '_> {
         Ok(name)
     }
 
+    fn buffer_region(&mut self, arg: u32, index: u64, space: u32) -> String {
+        let stage = self.cx.stage;
+        let var = self.layout.buffer(stage, index, self.cx.bindings);
+        // Plan 5.4: the binding starts at an aligned base below the Metal offset; the residual is the region's first
+        // byte.
+        let base = self.layout.uniform(stage, UniformValue::ResidualOffset { stage, index });
+        self.it.regions.insert(
+            arg,
+            ArgRegion { kind: RegionKind::Buffer { arg, index, space }, name: var, base: base.clone(), words: None },
+        );
+        base
+    }
+
     fn prelude(&mut self, item: &'static str) {
         self.it.prelude.push(item);
     }

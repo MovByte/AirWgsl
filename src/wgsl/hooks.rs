@@ -128,6 +128,10 @@ pub trait StageCx {
         source: BindingSource,
         wgsl_type: &str,
     ) -> Result<String, Refusal>;
+    /// Bind IR argument `arg` as the memory of the Metal buffer at `index` in address space `space` (1 device, 2
+    /// constant), declared, bound and accessed as a buffer argument is; returns the argument's value (the offset of
+    /// its region's first byte).
+    fn buffer_region(&mut self, arg: u32, index: u64, space: u32) -> String;
     /// A numerics library item the generated expressions call.
     fn prelude(&mut self, item: &'static str);
     /// A WebGPU feature the code needs.
