@@ -9,6 +9,7 @@ pub mod api;
 pub mod bitcode;
 pub mod bitstream;
 pub mod cfg;
+pub mod ftable;
 pub mod icb;
 pub mod ir;
 pub mod layout;

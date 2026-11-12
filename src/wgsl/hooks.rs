@@ -231,5 +231,8 @@ pub fn registered() -> Rules {
     for rule in crate::sync::rules() {
         r = r.with(rule);
     }
-    r.with(Box::new(crate::icb::Encoding)).with_stage(Box::new(crate::icb::Arguments))
+    r.with(Box::new(crate::icb::Encoding))
+        .with(Box::new(crate::ftable::Calls))
+        .with_stage(Box::new(crate::icb::Arguments))
+        .with_stage(Box::new(crate::ftable::Arguments))
 }
