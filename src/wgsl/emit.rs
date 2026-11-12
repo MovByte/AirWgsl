@@ -1599,9 +1599,11 @@ impl<'a> FnEmit<'a> {
                     parts[(pos / 32) as usize + 1].push(format!("{}.y", x));
                 }
                 1 => parts[(pos / 32) as usize].push(format!("(select(0u, 1u, {}) << {}u)", x, pos % 32)),
-                _ => {
-                    parts[(pos / 32) as usize].push(if pos.is_multiple_of(32) { x } else { format!("({} << {}u)", x, pos % 32) })
-                }
+                _ => parts[(pos / 32) as usize].push(if pos.is_multiple_of(32) {
+                    x
+                } else {
+                    format!("({} << {}u)", x, pos % 32)
+                }),
             }
         }
         let w: Vec<String> = parts
@@ -1861,6 +1863,10 @@ fn num_refusal(mut r: Refusal, construct: &str) -> Refusal {
     }
     if r.reason.contains("explicit rounding mode or saturation") {
         r.reason = format!("[family:conversion-explicit-rounding] {}", r.reason);
+        return r;
+    }
+    if let Some(f) = tracked::family_of(construct) {
+        r.reason = format!("[family:{}] {}", f, r.reason);
         return r;
     }
     let mut t = tracked::refuse(

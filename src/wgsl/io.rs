@@ -154,6 +154,12 @@ fn varying_type(m: &Module, t: TypeId, tn: Option<&str>, prelude: &mut Vec<&'sta
             let inp = lane_out(&|x| format!("nm_f32_to_f16(bitcast<u32>({}))", x)).replace("VEC", &vec_of("u32", n));
             Some(VaryingType { wgsl: vec_of("f32", n), integer: false, out, inp })
         }
+        // bool varyings: WGSL has no bool user-defined IO, so they travel as flat 0 or 1.
+        Type::Int(1) => {
+            let out = lane_out(&|x| format!("select(0u, 1u, {})", x)).replace("VEC", &vec_of("u32", n));
+            let inp = lane_out(&|x| format!("({} != 0u)", x)).replace("VEC", &vec_of("bool", n));
+            Some(VaryingType { wgsl: vec_of("u32", n), integer: true, out, inp })
+        }
         Type::Int(b @ (8 | 16 | 32)) => {
             let signed = matches!(tn.and_then(msl_type), Some(("sint", _)));
             let mask = if *b == 32 { None } else { Some((1u64 << b) - 1) };
@@ -208,6 +214,19 @@ pub fn varyings(m_v: Option<(&Module, &Entry)>, m_f: Option<(&Module, &Entry)>) 
         let f = &m.functions[e.function];
         let mut names: Vec<(String, TypeId, Record)> = Vec::new();
         for (i, r) in e.args.iter().enumerate() {
+            if let Some(r) = r
+                && r.kind() == "air.fragment_input"
+                && r.has("air.interpolation_function")
+            {
+                return Err(tracked::refuse_row(
+                    "pull-model-interpolation",
+                    RefusalKind::NoExactLowering,
+                    "air.fragment_input",
+                    loc(m, e.function),
+                    "an interpolant argument (interpolate_at_* functions)",
+                    "WGSL 13.3.1.4",
+                ));
+            }
             if let Some(r) = r
                 && r.kind() == "air.fragment_input"
                 && let Some(n) = r.str_after("air.fragment_input")
