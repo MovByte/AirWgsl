@@ -531,14 +531,12 @@ pub fn compile_with(
     if layout.uniform_size() > 0 {
         requirements.limits.insert("maxUniformBufferBindingSize".into(), layout.uniform_size());
     }
-    let wgsl = stages
-        .iter()
-        .map(|s| Stage {
-            stage: shader_stage(s.stage),
-            entry_point: ENTRY_POINT.into(),
-            source: finish_source(s, &layout),
-        })
-        .collect();
+    let mut wgsl = Vec::new();
+    for (s, inp) in stages.iter().zip(&order) {
+        let source = finish_source(s, &layout);
+        rules.check_stage(s.stage, &inp.module.ir.functions[inp.entry.function as usize].common.name, &source)?;
+        wgsl.push(Stage { stage: shader_stage(s.stage), entry_point: ENTRY_POINT.into(), source });
+    }
     // Reflection from the AIR metadata (package S2): the arguments the canonical function does not use are reported
     // inactive, as real Metal reports them after its own optimization.
     let mut stages_reflection = Vec::new();
@@ -613,5 +611,7 @@ pub fn compile_entry(
     let mut layout = Layout::new();
     let s = lower_stage(inp, &desc, host, rules, &Rounding::SoftFloat, &varyings, &mut layout)?;
     layout.finish(host, &[])?;
-    Ok((finish_source(&s, &layout), s.requirements))
+    let source = finish_source(&s, &layout);
+    rules.check_stage(s.stage, &inp.module.ir.functions[inp.entry.function as usize].common.name, &source)?;
+    Ok((source, s.requirements))
 }

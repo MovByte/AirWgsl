@@ -56,6 +56,8 @@ pub trait RuleCx {
     fn pointer(&mut self, v: Value) -> Result<Ptr, Refusal>;
     /// The WGSL name of region `r`'s array (for atomic built-ins: `&name[word]`).
     fn region_name(&self, r: usize) -> String;
+    /// Region `r` of the memory model (its kind, and whether it is declared atomic).
+    fn region(&self, r: usize) -> &crate::mem::Region;
     /// The IR argument a handle operand (texture, sampler) comes from, when it does.
     fn handle_arg(&self, v: Value) -> Option<u32>;
     /// The carrier type of an IR type.
@@ -97,6 +99,12 @@ pub trait CallRule: Send + Sync {
     }
     /// Lower the call; returns the result's WGSL expression (in the result type's carrier), `None` for void.
     fn lower(&self, cx: &mut dyn RuleCx, call: &CallSite<'_>) -> Result<Option<String>, Refusal>;
+    /// Check the finished WGSL module of a stage (its bindings declared) whose entry function `function` is: a rule
+    /// whose lowering is exact only when the module as a whole has a property (WGSL's uniformity analysis accepting
+    /// a barrier, for one) refuses the stage when it does not.
+    fn check_stage(&self, _stage: MetalStage, _function: &str, _wgsl: &str) -> Result<(), Refusal> {
+        Ok(())
+    }
 }
 
 /// What a stage-interface rule can do: declare entry parameters, read executor uniforms, ask for bindings and
@@ -202,6 +210,14 @@ impl Rules {
 
     pub fn find(&self, name: &str) -> Option<&dyn CallRule> {
         self.calls.iter().find(|r| r.handles(name)).map(|r| r.as_ref())
+    }
+
+    /// Run every call rule's check of a finished stage module.
+    pub fn check_stage(&self, stage: MetalStage, function: &str, wgsl: &str) -> Result<(), Refusal> {
+        for r in &self.calls {
+            r.check_stage(stage, function, wgsl)?;
+        }
+        Ok(())
     }
 }
 

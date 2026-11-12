@@ -1951,6 +1951,10 @@ impl RuleCx for FnEmit<'_> {
         self.mem.regions[r].name.clone()
     }
 
+    fn region(&self, r: usize) -> &crate::mem::Region {
+        &self.mem.regions[r]
+    }
+
     fn handle_arg(&self, v: Value) -> Option<u32> {
         let r = self.mem.regions(self.m, v).ok()?;
         match r.as_slice() {
