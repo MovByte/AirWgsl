@@ -8,7 +8,7 @@ A citation is an inline table in one of these forms:
                                           or "" for a single documentation page.
   { src = ID, ref = REF, absent = TERM }  TERM does not occur in that scope.
   { sdk = PATH, quote = TEXT }            TEXT occurs in the SDK header PATH, pinned in
-                                          the "sdk" source.
+                                          the "sdk" source (or absent = TERM: it does not).
   { measure = ID, case = CASE, quote = TEXT }
                                           the committed result of measurement ID records
                                           CASE, and TEXT occurs in that case's record.
@@ -57,12 +57,15 @@ class Checker:
             return
         self.checked += 1
         if "sdk" in c:
-            if "quote" not in c:
-                self.fail(where, "SDK citation without a quote")
-                return
             doc = specdoc.sdk_document("sdk", self.sources, c["sdk"])
-            if not doc.quote_in(None, c["quote"]):
-                self.fail(where, "quote not found in SDK %s: %r" % (c["sdk"], c["quote"]))
+            if "quote" in c:
+                if not doc.quote_in(None, c["quote"]):
+                    self.fail(where, "quote not found in SDK %s: %r" % (c["sdk"], c["quote"]))
+            elif "absent" in c:
+                if re.search(c["absent"], doc.text):
+                    self.fail(where, "term %r is present in SDK %s" % (c["absent"], c["sdk"]))
+            else:
+                self.fail(where, "SDK citation without a quote or absent term")
             return
         if "measure" in c:
             m = self.measures.get(c["measure"])
