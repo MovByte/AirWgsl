@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use crate::api::Refusal;
 use crate::ir::{AttrKind, Attribute, Block, BlockId, GlobalId, InstId, Module, Op, Value};
 
-use super::util::{new_inst, operands_mut, remove_inst, replace_uses, successors_mut, terminator};
+use super::util::{apply_replacements, new_inst, operands_mut, successors_mut, terminator};
 use super::{Item, refusal, refusal_at};
 
 /// Instructions in the entry point above which inlining refuses (a guard against exponential growth).
@@ -30,8 +30,26 @@ pub fn inline_all(m: &mut Module, f: usize) -> Result<(), Refusal> {
     // The functions each instruction was inlined through.
     let mut chains: HashMap<InstId, std::rc::Rc<HashSet<usize>>> = HashMap::new();
     let empty = std::rc::Rc::new(HashSet::new());
+    // Each inlined call's value, replaced in its uses once inlining is done (a pass over the function per call
+    // would make inlining quadratic). Until then a use of an inlined call's value, in the caller or in code inlined
+    // later with it as an argument, still names the call.
+    let mut values: HashMap<InstId, Value> = HashMap::new();
+    // The static allocas of each inlined callee, which end up at the start of the entry block, the last inlined
+    // first.
+    let mut statics: Vec<Vec<InstId>> = Vec::new();
+    // Inlining puts the callee's blocks and the rest of the call's block after every block, and leaves no call of a
+    // defined function in the blocks up to the call's: the next call is never before it.
+    let mut from = 0;
     loop {
-        let Some((call, callee)) = next_call(m, f) else { return Ok(()) };
+        let Some((call, callee, blk)) = next_call(m, f, from) else {
+            let func = &mut m.functions[f];
+            let mut entry: Vec<InstId> = statics.into_iter().rev().flatten().collect();
+            entry.append(&mut func.blocks[0].insts);
+            func.blocks[0].insts = entry;
+            apply_replacements(func, &values);
+            return Ok(());
+        };
+        from = blk;
         let chain = chains.get(&call).cloned().unwrap_or_else(|| empty.clone());
         if callee == f || chain.contains(&callee) {
             return Err(refusal_at(
@@ -55,30 +73,42 @@ pub fn inline_all(m: &mut Module, f: usize) -> Result<(), Refusal> {
         inner.insert(callee);
         let inner = std::rc::Rc::new(inner);
         let first_new = m.functions[f].insts.len() as u32;
-        inline_call(m, f, call, callee)?;
+        let (value, moved) = inline_call(m, f, call, callee, blk)?;
+        if let Some(v) = value {
+            values.insert(call, v);
+        }
+        statics.push(moved);
         for i in first_new..m.functions[f].insts.len() as u32 {
             chains.insert(InstId(i), inner.clone());
         }
     }
 }
 
-/// The first call of a defined function in `f`.
-fn next_call(m: &Module, f: usize) -> Option<(InstId, usize)> {
+/// The first call of a defined function in `f` in the blocks from `from` on, with its callee and block.
+fn next_call(m: &Module, f: usize, from: usize) -> Option<(InstId, usize, usize)> {
     let func = &m.functions[f];
-    for b in &func.blocks {
+    for (k, b) in func.blocks.iter().enumerate().skip(from) {
         for &i in &b.insts {
             if let Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } = &func.inst(i).op
                 && !m.functions[*c as usize].is_declaration()
             {
-                return Some((i, *c as usize));
+                return Some((i, *c as usize, k));
             }
         }
     }
     None
 }
 
+/// Inline call `call` (in block `blk`) of `callee`. Returns the value that replaces the call's, and the callee's
+/// static allocas, which the caller moves to the entry block; both are left for the caller to apply.
 #[allow(clippy::result_large_err)]
-fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<(), Refusal> {
+fn inline_call(
+    m: &mut Module,
+    f: usize,
+    call: InstId,
+    callee: usize,
+    blk: usize,
+) -> Result<(Option<Value>, Vec<InstId>), Refusal> {
     let g = m.functions[callee].clone();
     let (_, _, vararg) = m.types.function(g.ty).map(|(r, p, v)| (r, p.to_vec(), v)).unwrap();
     if vararg {
@@ -96,7 +126,6 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
         ));
     }
     let ret_ty = m.functions[f].inst(call).ty;
-    let blk = m.functions[f].blocks.iter().position(|b| b.insts.contains(&call)).unwrap();
     let pos = m.functions[f].blocks[blk].insts.iter().position(|&x| x == call).unwrap();
 
     // Argument values; byval arguments get a copy.
@@ -221,8 +250,10 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
     let br = new_inst(func, void, Op::Br { dest: BlockId(boff) });
     func.blocks[blk].insts.push(br);
     // The returned value.
-    if !m.types.is_void(ret_ty) {
-        let rv = match returns.len() {
+    let value = if m.types.is_void(ret_ty) {
+        None
+    } else {
+        Some(match returns.len() {
             0 => super::util::kind_const(m, ret_ty, crate::ir::ConstKind::Poison),
             1 => returns[0].0.unwrap(),
             _ => {
@@ -232,9 +263,8 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
                 func.blocks[cont.0 as usize].insts.insert(0, phi);
                 Value::Inst(phi)
             }
-        };
-        replace_uses(&mut m.functions[f], Value::Inst(call), rv);
-    }
+        })
+    };
     // Static allocas of the callee's entry block go to the caller's entry block.
     let func = &mut m.functions[f];
     let entry_new = boff as usize;
@@ -244,11 +274,9 @@ fn inline_call(m: &mut Module, f: usize, call: InstId, callee: usize) -> Result<
         .copied()
         .filter(|&i| matches!(&func.inst(i).op, Op::Alloca { count: Value::Const(_), .. }))
         .collect();
-    for a in statics.iter().rev() {
-        remove_inst(func, *a);
-        func.blocks[0].insts.insert(0, *a);
-    }
-    Ok(())
+    let moved: HashSet<InstId> = statics.iter().copied().collect();
+    func.blocks[entry_new].insts.retain(|i| !moved.contains(i));
+    Ok((value, statics))
 }
 
 /// `llvm.memcpy.p<as>.p<as>.i64`, declared if the module lacks it.
