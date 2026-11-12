@@ -57830,11 +57830,66 @@ cite = [
 id = "5.10-output-format-mismatch"
 plan = "5.10"
 question = "Metal's rule when a fragment output's type or component count differs from the attachment format."
-status = "open"
-owner = "V1"
-reason = "MSL lists the allowed output data types (float, half, int, uint, short, ushort vectors) but states no result for a type that does not match the attachment's format class or for missing components. What real Metal does is measured by V1 with and without the debug layer."
+status = "resolved"
+answer = "A color output whose type's class (float or half, signed integer, unsigned integer) differs from the attachment format's, or that has fewer components than the format has (an A8Unorm attachment needs four), fails pipeline creation; components beyond the format's are dropped; an attachment the fragment function writes no output for keeps its contents. Measured on an Apple M4 for nine output types and ten formats (measurement stage-mac, M4 data). On the target build the checks are the shader compiler's: 21H461's MTLCompiler holds the same messages (fragment shader color output does not have enough components for the pixel format, fragment shader color output requires 4 outputs for pixel format, and %s of type %s is not compatible with a %s color attachment). The same rule is WebGPU's (validating GPUFragmentState); AirWgsl refuses such pipelines as the device does."
 cite = [
   { src = "msl", ref = "5.2.3.5", quote = "floatn, halfn, intn, uintn, shortn, or ushortn Color value output for a color attachment." },
+  { measure = "stage-mac", case = "color-float-RGBA8Unorm", quote = "fragment shader color output does not have enough components for the pixel format (MTLPixelFormatRGBA8Unorm)" },
+  { measure = "stage-mac", case = "color-float3-A8Unorm", quote = "fragment shader color output requires 4 outputs for pixel format (MTLPixelFormatA8Unorm)" },
+  { measure = "stage-mac", case = "color-float4-R32Uint", quote = "output of type float4 is not compatible with a MTLPixelFormatR32Uint color attachment." },
+  { measure = "stage-mac", case = "color-float4-R8Unorm", quote = "pipeline: created" },
+  { measure = "stage-mac", case = "color-attachment-without-output", quote = "after_draw: 5 6 7 8" },
+]
+
+[[question]]
+id = "5.10-varying-linking"
+plan = "5.10"
+question = "Which vertex outputs does Metal link to the fragment inputs of the same name?"
+status = "open"
+reason = "MSL states no rule. Measured on an Apple M4 only (measurement stage-mac; M4 data): a fragment input the function reads links when the vertex output of its name has the same type, except that an integer may be signed on one side and unsigned on the other; another type (float and half, other component counts, other integer widths, bool and uint) or no output of that name fails pipeline creation; an input the function does not read links whatever its type and whether or not an output exists. On the target build the check is the vertex compiler's: 21H461's AGXCompilerCore holds the message (Following fragment input(s) mismatching vertex shader output type(s) or not written by vertex shader); whether its rule equals the M4's in every case is unmeasured."
+cite = [
+  { measure = "stage-mac", case = "varying-int-to-uint", quote = "pipeline: created" },
+  { measure = "stage-mac", case = "varying-short-to-int", quote = "mismatching vertex shader output type(s) or not written by vertex shader" },
+  { measure = "stage-mac", case = "varying-float-to-half", quote = "mismatching vertex shader output type(s) or not written by vertex shader" },
+  { measure = "stage-mac", case = "varying-float-to-half-unread", quote = "pipeline: created" },
+  { measure = "stage-mac", case = "varying-no-output-to-float", quote = "not written by vertex shader" },
+  { measure = "stage-mac", case = "varying-no-output-to-float-unread", quote = "pipeline: created" },
+]
+
+[[question]]
+id = "5.7-thread-index-3d"
+plan = "5.7"
+question = "What is thread_index_in_threadgroup for a threadgroup of more than one layer?"
+status = "open"
+reason = "MSL 5.2.3.6 defines the index as ly * Sx + lx for a 2D threadgroup and states nothing for 3D. Measured on an Apple M4 only (measurement stage-mac; M4 data): (lz * Sy + ly) * Sx + lx for 4x2x2, 3x5x2, 2x2x8 and 8x4x4 threadgroups, which is WGSL's local_invocation_index. The A10X remains unmeasured."
+cite = [
+  { src = "msl", ref = "5.2.3.6", quote = "In cases other than a tile function, the thread index in the threadgroup (thread_index_in_threadgroup) is determined by: ly * Sx + lx" },
+  { measure = "stage-mac", case = "thread-index-8x4x4", quote = "index_equals_z_sy_plus_y_sx_plus_x: True" },
+  { measure = "stage-mac", case = "thread-index-3x5x2", quote = "index_equals_z_sy_plus_y_sx_plus_x: True" },
+]
+
+[[question]]
+id = "5.7-sample-mask-input-per-sample"
+plan = "5.7"
+question = "What does the [[sample_mask]] input hold in a fragment function that runs per sample?"
+status = "open"
+reason = "MSL describes the input as the set of samples covered by the primitive. Measured on an Apple M4 only (measurement stage-mac; M4 data): the whole coverage mask (0xf for a covered pixel, 0x5 for a pixel half covered) whether the function runs per pixel or per sample ([[sample_id]] read). WGSL lets the input of a function that runs per sample be either the coverage mask or the one sample's bit, so AirWgsl refuses that combination with more than one sample."
+cite = [
+  { src = "msl", ref = "5.2.3.4", quote = "The set of samples covered by the primitive generating the fragment during multisample rasterization." },
+  { measure = "stage-mac", case = "sample-mask-input-per-sample", quote = "pixel_3_0_samples: 0x5 0x0 0x5 0x0" },
+  { measure = "stage-mac", case = "sample-mask-input-per-pixel", quote = "pixel_0_0_samples: 0xf 0xf 0xf 0xf" },
+]
+
+[[question]]
+id = "5.7-fragment-depth-range"
+plan = "5.7"
+question = "To what range is a [[depth(any)]] output clamped before it is stored?"
+status = "open"
+reason = "MSL states no clamp. Measured on an Apple M4 only (measurement stage-mac; M4 data): a Depth32Float attachment stores the output clamped to [0, 1] and not to the viewport's depth range (0.9 and 0.1 are stored as written with a viewport depth range of 0.25 to 0.75). WebGPU clamps frag_depth to the viewport's [minDepth, maxDepth], so the two agree only for a viewport depth range of [0, 1]; a draw with another range and a depth-writing pipeline is the executor's to refuse. The A10X remains unmeasured."
+cite = [
+  { measure = "stage-mac", case = "depth-output-1.5-viewport-0.0-1.0", quote = "stored: 1.0" },
+  { measure = "stage-mac", case = "depth-output-0.9-viewport-0.25-0.75", quote = "stored: 0.9" },
+  { src = "webgpu", ref = "#fragment-processing", quote = "Set fragment.depth to clamp(value, vp.minDepth, vp.maxDepth)." },
 ]
 
 [[question]]
