@@ -339,26 +339,30 @@ fn lower_math(c: &mut Ctx, f: &MathFn, fast_name: bool, b: &[String], tys: &[Ty]
 }
 
 fn lower_sincos(c: &mut Ctx, fast_name: bool, b: &[String], tys: &[Ty], flags: FastMath) -> R<Out> {
-    if b.len() != 2 || tys[0].lanes != 1 || !tys[0].scalar.is_float() {
-        return Err(c.malformed("sincos takes a scalar float and a pointer"));
+    let ty = tys[0];
+    if b.len() != 2 || !ty.scalar.is_float() {
+        return Err(c.malformed("sincos takes a float scalar or vector and a pointer"));
     }
-    let s = tys[0].scalar;
+    let s = ty.scalar;
     let fast = if s == Scalar::F32 { fast_name } else { fast_name || flags.finite_only() };
     let (rule, native) = decide(c, "sincos", s, fast)?;
-    let pair = if native {
-        let sin = native_lane(c, s, "sin({0})", &[b[0].clone()], &[])?;
-        let cos = native_lane(c, s, "cos({0})", &[b[0].clone()], &[])?;
-        c.bind(&format!("vec2<u32>({}, {})", sin, cos))
-    } else {
-        let f = lib_name("sincos", s);
-        c.need(&f)?;
-        c.bind(&format!("{}({})", f, b[0]))
-    };
-    Ok(Out {
-        value: Some(format!("{}.x", pair)),
-        stores: vec![Store { operand: 1, value: format!("{}.y", pair), ty: Ty::scalar(s) }],
-        rule,
-    })
+    // One (sin, cos) pair per lane; the sines are the value, the cosines are stored through the pointer operand.
+    let mut pairs = Vec::new();
+    for i in 0..ty.lanes {
+        let x = lane(&b[0], ty, i);
+        pairs.push(if native {
+            let sin = native_lane(c, s, "sin({0})", std::slice::from_ref(&x), &[])?;
+            let cos = native_lane(c, s, "cos({0})", &[x], &[])?;
+            c.bind(&format!("vec2<u32>({}, {})", sin, cos))
+        } else {
+            let f = lib_name("sincos", s);
+            c.need(&f)?;
+            c.bind(&format!("{}({})", f, x))
+        });
+    }
+    let sines = build(ty, pairs.iter().map(|p| format!("{}.x", p)).collect());
+    let cosines = build(ty, pairs.iter().map(|p| format!("{}.y", p)).collect());
+    Ok(Out { value: Some(sines), stores: vec![Store { operand: 1, value: cosines, ty }], rule })
 }
 
 /// dot: the sum of the products, left to right (MSL Table 6.11).
@@ -1038,7 +1042,8 @@ fn lower_pack(c: &mut Ctx, pack: bool, parts: &[&str], b: &[String], tys: &[Ty],
     };
     let vty = parse_suffix(suffix).unwrap_or(Ty::scalar(Scalar::F32));
     if !vty.scalar.is_float() || vty.lanes as usize != fmt.comps.len() {
-        return Err(c.malformed(format!("format with type {}", suffix)));
+        // The front end's grammar admits any float type here; MSL's functions take one vector size per format.
+        return Err(c.malformed(format!("the packed format takes {} float components, not {}", fmt.comps.len(), suffix)));
     }
     let half = vty.scalar == Scalar::F16;
     if pack {

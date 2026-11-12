@@ -177,23 +177,70 @@ fn signature(name: &str) -> Option<(Vec<Ty>, Ty)> {
     })
 }
 
-#[test]
-fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tables/intrinsics.toml")).unwrap();
-    let mut names = Vec::new();
-    let mut cur_name = String::new();
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("name = \"") {
-            cur_name = v.trim_end_matches('"').to_string();
-        }
-        if let Some(v) = line.strip_prefix("family = \"") {
-            let fam = v.trim_end_matches('"');
-            if ["math-float", "math-geometric", "integer", "conversion", "relational", "derivative", "pack-unpack"].contains(&fam) {
-                names.push((cur_name.clone(), fam.to_string()));
-            }
+const NUMERIC_FAMILIES: &[&str] = &["math-float", "math-geometric", "integer", "conversion", "relational", "derivative", "pack-unpack"];
+
+/// Every name of the numeric families in tables/intrinsics.toml (or the file NM_INTRINSICS_TOML names), with its
+/// family. The table lists names one per [[name]] row, or, in its grammar form, as [[function]] names followed by
+/// one type token per slot from the slot's [[domain]] (tokens whose element a domain reclassifies into another
+/// family, such as f64, are left out).
+fn numeric_names() -> Vec<(String, String)> {
+    let path = std::env::var("NM_INTRINSICS_TOML").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tables/intrinsics.toml").into());
+    let table: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let arr = |k: &str| table.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let s = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let mut out = Vec::new();
+    for n in arr("name") {
+        let fam = s(&n, "family");
+        if NUMERIC_FAMILIES.contains(&fam.as_str()) {
+            out.push((s(&n, "name"), fam));
         }
     }
-    assert!(names.len() > 1300, "{} names", names.len());
+    let domains = arr("domain");
+    let families = arr("family");
+    for f in arr("function") {
+        let fam = s(&f, "family");
+        if !NUMERIC_FAMILIES.contains(&fam.as_str()) {
+            continue;
+        }
+        let slots: Vec<String> = f.get("slots").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let mut names = vec![s(&f, "name")];
+        for kind in slots {
+            let fam_row = families.iter().find(|x| s(x, "id") == fam);
+            let dom_id = fam_row.and_then(|r| r.get("domains")).and_then(|d| d.get(&kind)).and_then(|v| v.as_str()).map(String::from);
+            let dom = domains
+                .iter()
+                .find(|d| match &dom_id {
+                    Some(id) => &s(d, "id") == id,
+                    None => d.get("default_for").and_then(|v| v.as_array()).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(kind.as_str()))),
+                })
+                .unwrap_or_else(|| panic!("no domain for slot {}", kind));
+            let reclassified: Vec<String> = dom
+                .get("reclassify")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|p| p.as_array().and_then(|p| p[0].as_str()).map(String::from)).collect())
+                .unwrap_or_default();
+            let mut tokens = Vec::new();
+            for e in dom.get("elements").and_then(|v| v.as_array()).unwrap() {
+                let e = e.as_str().unwrap();
+                if reclassified.iter().any(|r| r == e) {
+                    continue;
+                }
+                for w in dom.get("widths").and_then(|v| v.as_array()).unwrap() {
+                    let w = w.as_integer().unwrap();
+                    tokens.push(if w == 1 { e.to_string() } else { format!("v{}{}", w, e) });
+                }
+            }
+            names = names.iter().flat_map(|n| tokens.iter().map(move |t| format!("{}.{}", n, t))).collect();
+        }
+        out.extend(names.into_iter().map(|n| (n, fam.clone())));
+    }
+    out
+}
+
+#[test]
+fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
+    let names = numeric_names();
+    assert!(names.len() > 1000, "{} names", names.len());
     let mut tally: BTreeMap<String, usize> = BTreeMap::new();
     let mut module = String::from("enable f16;\n");
     let mut prelude = airwgsl::num::prelude::Prelude::new();
@@ -230,7 +277,8 @@ fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
                         e.reason.contains("rounding mode")
                             || e.reason.contains("mul24 and mad24")
                             || e.reason.contains("derivative of an integer")
-                            || e.reason.contains("has no MSL function"),
+                            || e.reason.contains("has no MSL function")
+                            || e.reason.contains("packed format takes"),
                         "{}: unexpected refusal {}",
                         name,
                         e
@@ -828,4 +876,30 @@ fn half_fallback_without_shader_f16() {
     }
     eprintln!("air.sin.v2f16 without shader-f16 ({:?}): max error {} binary16 ulp", l.rule.how, max);
     assert!(max <= 1.0);
+}
+
+/// sincos on vectors (MSL defines it for every float vector type): the sines are the value and the cosines the
+/// store, lane by lane equal to the library's sin and cos.
+#[test]
+fn vector_sincos_returns_sines_and_stores_cosines() {
+    let mut rng = Rng::new(38);
+    let ty = Ty::vector(Scalar::F32, 3);
+    let caps = host(true);
+    let soft = Rounding::SoftFloat;
+    let ops = [Operand { expr: "vec3<u32>(nm_t_in0[3u * i], nm_t_in0[3u * i + 1u], nm_t_in0[3u * i + 2u])", ty, constant: None }, Operand { expr: "0u", ty, constant: None }];
+    let l = lower(Op::Call("air.sincos.v3f32"), &ops, Some(ty), FastMath::NONE, Target { rounding: &soft, host: &caps }, "v").unwrap();
+    assert_eq!(l.stores.len(), 1);
+    let mut p = l.prelude.clone();
+    p.require("nm_f32_sin").unwrap();
+    p.require("nm_f32_cos").unwrap();
+    let body = format!(
+        "{}\nlet s = {};\nlet c = {};\nfor (var k = 0u; k < 3u; k++) {{ let x = nm_t_in0[3u * i + k]; nm_t_out[6u * i + k] = select(1u, 0u, s[k] == nm_f32_sin(x)); nm_t_out[6u * i + 3u + k] = select(1u, 0u, c[k] == nm_f32_cos(x)); }}",
+        l.stmts.join("\n"),
+        l.value.unwrap(),
+        l.stores[0].value
+    );
+    let k = Kernel::new(&crate::gpu::kernel_source(false, &p.emit().unwrap(), "", &body), 6);
+    let input: Vec<u32> = (0..3 * 4096).map(|_| f32_any(&mut rng)).collect();
+    let out = k.run(&[&input], [0, 0, 0], 4096);
+    assert!(out.iter().all(|&w| w == 0), "a lane differs from the library's sin or cos");
 }
