@@ -24,29 +24,73 @@ pub fn f(bits: u32) -> f32 {
     f32::from_bits(bits)
 }
 
-pub fn add(a: u32, b: u32) -> u32 {
-    (f(a) + f(b)).to_bits()
+// binary32 arithmetic as explicit instructions: the compiler may commute an operator, which changes which NaN operand
+// the result carries.
+macro_rules! s_binary {
+    ($name:ident, $insn:literal) => {
+        pub fn $name(a: u32, b: u32) -> u32 {
+            let r: u32;
+            // SAFETY: base AArch64 floating-point instructions on the named registers only.
+            unsafe {
+                asm!(
+                    "fmov {x:s}, {a:w}",
+                    "fmov {y:s}, {b:w}",
+                    concat!($insn, " {x:s}, {x:s}, {y:s}"),
+                    "fmov {r:w}, {x:s}",
+                    a = in(reg) a,
+                    b = in(reg) b,
+                    r = out(reg) r,
+                    x = out(vreg) _,
+                    y = out(vreg) _,
+                )
+            };
+            r
+        }
+    };
 }
 
-pub fn sub(a: u32, b: u32) -> u32 {
-    (f(a) - f(b)).to_bits()
-}
-
-pub fn mul(a: u32, b: u32) -> u32 {
-    (f(a) * f(b)).to_bits()
-}
-
-pub fn div(a: u32, b: u32) -> u32 {
-    (f(a) / f(b)).to_bits()
-}
+s_binary!(add, "fadd");
+s_binary!(sub, "fsub");
+s_binary!(mul, "fmul");
+s_binary!(div, "fdiv");
 
 pub fn sqrt(a: u32) -> u32 {
-    f(a).sqrt().to_bits()
+    let r: u32;
+    // SAFETY: as above.
+    unsafe {
+        asm!(
+            "fmov {x:s}, {a:w}",
+            "fsqrt {x:s}, {x:s}",
+            "fmov {r:w}, {x:s}",
+            a = in(reg) a,
+            r = out(reg) r,
+            x = out(vreg) _,
+        )
+    };
+    r
 }
 
-/// fma(a, b, c) = a * b + c rounded once (FMADD).
+/// fma(a, b, c) = a * b + c rounded once (FMADD Sd, Sn=a, Sm=b, Sa=c).
 pub fn fma(a: u32, b: u32, c: u32) -> u32 {
-    f(a).mul_add(f(b), f(c)).to_bits()
+    let r: u32;
+    // SAFETY: as above.
+    unsafe {
+        asm!(
+            "fmov {x:s}, {a:w}",
+            "fmov {y:s}, {b:w}",
+            "fmov {z:s}, {c:w}",
+            "fmadd {x:s}, {x:s}, {y:s}, {z:s}",
+            "fmov {r:w}, {x:s}",
+            a = in(reg) a,
+            b = in(reg) b,
+            c = in(reg) c,
+            r = out(reg) r,
+            x = out(vreg) _,
+            y = out(vreg) _,
+            z = out(vreg) _,
+        )
+    };
+    r
 }
 
 pub fn quiet(a: u32) -> u32 {
@@ -329,11 +373,10 @@ fn is_snan(a: u32) -> bool {
     f(a).is_nan() && a & 0x0040_0000 == 0
 }
 
-/// The NaN two NaN operands give: the CPU's own choice, observed through an addition.
+/// The NaN two NaN operands give: the CPU's own choice, observed through an FADD.
 pub fn nan2(a: u32, b: u32) -> u32 {
     let r = add(a, b);
-    debug_assert!(f(r).is_nan());
-    let _ = is_snan;
+    debug_assert!(f(r).is_nan() && (is_snan(a) || is_snan(b) || r == a || r == b));
     r
 }
 

@@ -5,8 +5,11 @@
 //! binary16 inputs of a binary operation, long random runs) are `#[ignore]`d and run with
 //! `cargo test --release --test num -- --ignored`.
 
+mod common;
 mod gpu;
 mod inputs;
+mod math;
+mod metal_special;
 mod reference;
 mod softfloat;
 

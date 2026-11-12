@@ -16,6 +16,10 @@ const SOURCES: &[(&str, &str)] = &[
     ("wide.wgsl", include_str!("wgsl/wide.wgsl")),
     ("f32.wgsl", include_str!("wgsl/f32.wgsl")),
     ("conv.wgsl", include_str!("wgsl/conv.wgsl")),
+    ("xf.wgsl", include_str!("wgsl/xf.wgsl")),
+    ("xfconst.wgsl", include_str!("wgsl/xfconst.wgsl")),
+    ("math.wgsl", include_str!("wgsl/math.wgsl")),
+    ("common.wgsl", include_str!("wgsl/common.wgsl")),
 ];
 
 /// One top-level library item.
