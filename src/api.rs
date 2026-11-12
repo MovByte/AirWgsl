@@ -493,6 +493,22 @@ pub enum UniformValue {
     ResidualOffset { stage: MetalStage, index: u64 },
     /// Length in bytes of the buffer bound at the slot, from the offset (for `air.buffer_size` and bounds).
     BufferLength { stage: MetalStage, index: u64 },
+    /// The origin of the dispatch's stage-in region (`setStageInRegion:`): three `u32`, x, y and z, at consecutive
+    /// offsets.
+    StageInOrigin,
+    /// The size of the dispatch's stage-in region (`setStageInRegion:`): three `u32`, width, height and depth, at
+    /// consecutive offsets.
+    StageInSize,
+}
+
+impl UniformValue {
+    /// The number of `u32` words the value occupies in the block.
+    pub fn words(&self) -> u64 {
+        match self {
+            UniformValue::StageInOrigin | UniformValue::StageInSize => 3,
+            _ => 1,
+        }
+    }
 }
 
 /// How the executor runs the pipeline's work. Emulations add plans; a plan the executor does not know is a failure it

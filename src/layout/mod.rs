@@ -86,18 +86,31 @@ impl Layout {
         Layout::default()
     }
 
-    /// The WGSL expression of a uniform field (a `u32`), allocating it on first use.
+    /// The WGSL expression of a uniform field (a `u32`), allocating it on first use. For a value of several words
+    /// ([`UniformValue::words`]) it is the first word; [`Layout::uniform_words`] gives each.
     pub fn uniform(&mut self, stage: MetalStage, value: UniformValue) -> String {
+        self.uniform_words(stage, value).swap_remove(0)
+    }
+
+    /// The WGSL expressions (each a `u32`) of the words of a uniform field, allocating it on first use. Fields are
+    /// packed word after word in the order they are first asked for.
+    pub fn uniform_words(&mut self, stage: MetalStage, value: UniformValue) -> Vec<String> {
         self.uniform_stages = self.uniform_stages | ShaderStages::from(shader_stage(stage));
+        let words = value.words();
         let offset = match self.fields.iter().find(|f| f.value == value) {
             Some(f) => f.offset,
             None => {
-                let offset = 4 * self.fields.len() as u64;
+                let offset = self.fields.last().map(|f| f.offset + 4 * f.value.words()).unwrap_or(0);
                 self.fields.push(UniformField { offset, value });
                 offset
             }
         };
-        format!("{}[{}][{}]", UNIFORM_VAR, offset / 16, (offset / 4) % 4)
+        (0..words)
+            .map(|k| {
+                let o = offset + 4 * k;
+                format!("{}[{}][{}]", UNIFORM_VAR, o / 16, (o / 4) % 4)
+            })
+            .collect()
     }
 
     /// The storage variable serving buffer `index` of `stage` (creating it), from the stage's bindings: slots of one
@@ -232,7 +245,7 @@ impl Layout {
 
     /// The uniform block's size in bytes (a multiple of 16), 0 when no field is used.
     pub fn uniform_size(&self) -> u64 {
-        (4 * self.fields.len() as u64).div_ceil(16) * 16
+        self.fields.last().map(|f| f.offset + 4 * f.value.words()).unwrap_or(0).div_ceil(16) * 16
     }
 
     /// The WGSL declarations a stage's module needs: the uniform block (when used by any stage) and the stage's
@@ -363,6 +376,14 @@ mod tests {
         assert_eq!(e1, "aw_u[0][1]");
         assert_eq!(e0, e0b);
         assert_eq!(l.uniform_size(), 16);
+        // A three-word value takes the next three words; the field after it follows them.
+        let origin = l.uniform_words(MetalStage::Kernel, UniformValue::StageInOrigin);
+        assert_eq!(origin, ["aw_u[0][2]", "aw_u[0][3]", "aw_u[1][0]"]);
+        assert_eq!(l.uniform(MetalStage::Kernel, UniformValue::BaseInstance), "aw_u[1][1]");
+        assert_eq!(l.uniform_size(), 32);
+        let bl = l.binding_layout();
+        let BindingSource::Uniforms(block) = &bl.groups[0].entries[0].source else { panic!("no uniform block") };
+        assert_eq!(block.fields.iter().map(|f| f.offset).collect::<Vec<_>>(), [0, 4, 8, 20]);
     }
 
     #[test]
