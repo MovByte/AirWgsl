@@ -273,6 +273,40 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.9",
     },
     Item {
+        id: "fetch-format-class",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a color input whose type's class (float or half, signed, unsigned integer) differs from its \
+                  attachment's pixel format (Metal: \"input of type ... is not compatible with a ... color \
+                  attachment\")",
+        reference: "MSL 5.2.3.4; measured on Metal (src/fetch/mod.rs)",
+    },
+    Item {
+        id: "fetch-raster-order-group",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a color input in a raster order group: the A10X has no raster order groups (D1 \
+                  supportsRasterOrderGroups = false)",
+        reference: "MSL 5.2.3.4; WebMetal profile/ipados-17.7.11-21H461-a10x.toml",
+    },
+    Item {
+        id: "fetch-attachment",
+        owner: Some("S6c"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a color input whose attachment the pipeline gives no pixel format, or whose format the executor \
+                  stores in another WebGPU format (the snapshot would hold the stored texels, not Metal's)",
+        reference: "plan 5.9",
+    },
+    Item {
+        id: "fetch-sample-mask",
+        owner: Some("S6c"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a multisampled fragment function reading both a color input and [[sample_mask]]: the mask a \
+                  fetching invocation sees is hardware behavior (an Apple M4 runs it once per group of samples with \
+                  equal contents) not measured on the A10X",
+        reference: "plan 5.9; MSL 5.2.3.4",
+    },
+    Item {
         id: "resource-argument",
         owner: Some("S6a"),
         kind: RefusalKind::NotImplemented,

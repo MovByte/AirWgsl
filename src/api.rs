@@ -463,6 +463,10 @@ pub enum BindingSource {
     ConstantSampler { encoding: u64 },
     /// The executor's per-draw uniform block, laid out as described.
     Uniforms(UniformBlock),
+    /// The snapshot of color attachment `attachment` that a framebuffer-fetch draw reads ([`PassPlan::PerPrimitive`]):
+    /// a texture of the attachment's stored format, sample count and size, holding the attachment's contents as they
+    /// were before the primitives the current WebGPU pass draws.
+    FetchSnapshot { attachment: u32 },
 }
 
 /// The executor's per-draw uniform block: what each field holds and where.
@@ -518,7 +522,19 @@ impl UniformValue {
 pub enum PassPlan {
     /// Each draw or dispatch is one WebGPU draw or dispatch in the current pass.
     Direct,
+    /// Framebuffer fetch (plan 5.9): the fragment function reads the color attachments `fetched` (ascending) through
+    /// [`BindingSource::FetchSnapshot`] bindings, and each fragment must see the writes of every earlier primitive of
+    /// the pass, its own draw's included. The executor draws the primitives of a draw in primitive order, in groups:
+    /// before each group it ends the WebGPU pass, copies each fetched attachment into its snapshot, and begins a pass
+    /// that loads the attachments; the group is drawn in that pass with the snapshots bound.
+    ///
+    /// One primitive per group is exact for any geometry. A group of several primitives is exact when no two of them
+    /// cover a common pixel, which `overlap` proves for a draw when it is present ([`crate::fetch::overlap`]): its
+    /// [`OverlapProver::groups`] gives groups that may be drawn together. Without it every group is one primitive.
+    PerPrimitive { fetched: Vec<u32>, overlap: Option<OverlapProver> },
 }
+
+pub use crate::fetch::overlap::OverlapProver;
 
 /// Pipeline reflection, field for field the wire protocol's `Reflection` that the guest builds Metal's reflection
 /// objects from. Raw values are Metal's (`MTLFunctionType`, `MTLArgumentType`, `MTLBindingAccess`, `MTLDataType`,

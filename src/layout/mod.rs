@@ -167,6 +167,7 @@ impl Layout {
             BindingSource::ConstantSampler { encoding } => format!("aw_cs{}{:x}", s, encoding),
             BindingSource::MetalBuffer { index, .. } => format!("aw_rb{}{}", s, index),
             BindingSource::Uniforms(_) => format!("aw_ru{}", s),
+            BindingSource::FetchSnapshot { attachment } => format!("aw_fb{}{}", s, attachment),
         }
     }
 

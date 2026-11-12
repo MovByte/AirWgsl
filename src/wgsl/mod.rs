@@ -724,12 +724,20 @@ pub fn compile_with(
             .push(crate::reflect::stage(&i.module, &i.entry, inputs, stage_input).map_err(tracked::name_item)?);
     }
     let reflection = Reflection { stages: stages_reflection };
-    Ok(Compiled { wgsl, layout: layout.binding_layout(), passes: vec![PassPlan::Direct], reflection, requirements })
+    let layout = layout.binding_layout();
+    // Framebuffer fetch (package S6c): the pass plan, with the overlap prover of the vertex function when it qualifies.
+    let plan = crate::fetch::plan(&layout, || {
+        let v = order.iter().find(|i| i.stage == MetalStage::Vertex)?;
+        let key = crate::fetch::overlap::key(stage_modules);
+        crate::fetch::overlap::build(&v.module.ir, &v.entry, rounding, host, key).ok()
+    });
+    Ok(Compiled { wgsl, layout, passes: vec![plan], reflection, requirements })
 }
 
 /// Lower one entry point on its own (for corpus checks): a kernel as a compute pipeline with `threads` threads per
-/// threadgroup, a vertex or fragment function as a render stage whose varyings are its own, and `[[stage_in]]`
-/// attributes described as read in their own types.
+/// threadgroup, a vertex or fragment function as a render stage whose varyings are its own, `[[stage_in]]` attributes
+/// described as read in their own types, and the color attachments a fragment function reads given formats of their
+/// inputs' classes ([`crate::fetch::corpus_attachments`]).
 pub fn compile_entry(
     inp: &Input,
     host: &HostCaps,
@@ -774,7 +782,12 @@ pub fn compile_entry(
                     }
                     VertexDescriptor { layouts, attributes }
                 }),
-                color_attachments: Vec::new(),
+                // The attachments a fragment function reads, in formats of their inputs' classes (package S6c).
+                color_attachments: if inp.stage == MetalStage::Fragment {
+                    crate::fetch::corpus_attachments(&inp.module.ir, &inp.entry)
+                } else {
+                    Vec::new()
+                },
                 depth_attachment_pixel_format: 0,
                 stencil_attachment_pixel_format: 0,
                 raster_sample_count: 1,

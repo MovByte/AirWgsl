@@ -10,6 +10,7 @@ pub mod argbuf;
 pub mod bitcode;
 pub mod bitstream;
 pub mod cfg;
+pub mod fetch;
 pub mod ftable;
 pub mod icb;
 pub mod interp;

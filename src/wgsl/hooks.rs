@@ -277,6 +277,7 @@ pub fn registered() -> Rules {
         .with_stage(Box::new(crate::argbuf::ArgumentBuffers))
         .with_stage(Box::new(crate::icb::Arguments))
         .with_stage(Box::new(crate::ftable::Arguments))
-        .with(Box::new(crate::tex::Textures));
+        .with(Box::new(crate::tex::Textures))
+        .with_stage(Box::new(crate::fetch::Fetch));
     crate::stage::register(r)
 }
