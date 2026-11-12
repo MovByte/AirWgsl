@@ -258,6 +258,11 @@ fn compile_canonicalizes_with_the_function_constants() {
     // A value of another type is rejected, as Metal rejects it.
     let r = compile(vec![with(0, 3, &[0; 4])]).unwrap_err();
     assert!(r.reason.starts_with("[compiler:function-constant-type]"), "{}", r);
+    // fc_i = -1 puts the optional argument at buffer index 0, where `out` is: Metal refuses the specialization while
+    // the argument exists, and accepts it once its predicate removes it.
+    let r = compile(vec![with(0, 29, &(-1i32).to_le_bytes()), with(1, 53, &[1])]).unwrap_err();
+    assert!(r.reason.starts_with("[compiler:binding-location]"), "{}", r);
+    compile(vec![with(0, 29, &(-1i32).to_le_bytes()), with(1, 53, &[0])]).unwrap_or_else(|r| panic!("{}", r));
 }
 
 /// The specialization rules against the measured Metal behavior.

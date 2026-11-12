@@ -534,6 +534,14 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.4",
     },
     Item {
+        id: "binding-location",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "two arguments of one binding kind (buffer, threadgroup, texture, sampler) whose locations overlap \
+                  once function constants are set: Metal fails the specialization with MTLLibraryErrorCompileFailure",
+        reference: "measured: Apple M4, macOS 27.0.1 (newFunctionWithName:constantValues:)",
+    },
+    Item {
         id: "vertex-position",
         owner: None,
         kind: RefusalKind::NoExactLowering,

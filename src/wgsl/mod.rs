@@ -141,8 +141,102 @@ pub fn canonical_input(
     let reflection = crate::passes::reflection::canonical_inputs(&c);
     let decoded = air::AirModule::decode(c.module).map_err(tracked::name_item)?;
     let mut inp = input_of(decoded, function, function_type)?;
+    resolve_slots(&mut inp.entry, &reflection.slots);
+    check_locations(&inp.module.ir, &inp.entry, &reflection)?;
     inp.reflection = reflection;
     Ok(inp)
+}
+
+/// Refuse arguments of one binding kind whose locations overlap once function constants are set. Metal refuses such
+/// a specialization: `newFunctionWithName:constantValues:` fails with `MTLLibraryErrorCompileFailure` ("texture
+/// argument b has invalid location (<0,1>)"; measured on an Apple M4, macOS 27.0.1, for textures and buffers whose
+/// index a function constant gives). Arguments a false predicate removes take no location.
+fn check_locations(m: &Module, entry: &air::EntryPoint, inputs: &crate::reflect::Inputs) -> R<()> {
+    use air::{Role, Slot};
+    let f = &m.functions[entry.function as usize];
+    let mut taken: Vec<(&'static str, u32, u32, String)> = Vec::new();
+    for a in &entry.arguments {
+        if let Some(p) = &a.predicate
+            && inputs.predicates.get(&p.global) != Some(&true)
+        {
+            continue;
+        }
+        let space = |b: &air::Buffer| {
+            b.address_space.or_else(|| f.args.get(a.position as usize).and_then(|x| m.types.pointer_addrspace(x.ty)))
+        };
+        let (kind, loc) = match &a.role {
+            Role::Buffer(b) | Role::IndirectBuffer(b) if space(b) == Some(3) => ("threadgroup", b.location),
+            Role::Buffer(b) | Role::IndirectBuffer(b) => ("buffer", b.location),
+            Role::InstanceAccelerationStructure(l, _)
+            | Role::PrimitiveAccelerationStructure(l, _)
+            | Role::IntersectionFunctionTable(l, _)
+            | Role::VisibleFunctionTable(l, _) => ("buffer", *l),
+            Role::Texture { location, .. } => ("texture", *location),
+            Role::Sampler(l) => ("sampler", *l),
+            _ => continue,
+        };
+        let (Slot::Value(lo), Slot::Value(n)) = (loc.index, loc.count) else { continue };
+        let name = a.name.clone().unwrap_or_else(|| format!("argument {}", a.position));
+        let hi = lo.saturating_add(n.max(1));
+        if let Some((_, _, _, other)) = taken.iter().find(|(k, l, h, _)| *k == kind && lo < *h && *l < hi) {
+            return Err(tracked::refuse(
+                "binding-location",
+                name.clone(),
+                Some(Location { function: f.common.name.clone(), instruction: None }),
+                format!("{} argument {} has location [{}, {}), which overlaps {}'s", kind, name, lo, hi, other),
+            ));
+        }
+        taken.push((kind, lo, hi, name));
+    }
+    Ok(())
+}
+
+/// Replace the binding indices and counts the entry's records take from globals by the values canonicalization left
+/// in those globals, so that every lowering (and reflection) reads them as numbers. A global without a value stays,
+/// for the lowering that needs it to refuse.
+fn resolve_slots(entry: &mut air::EntryPoint, slots: &BTreeMap<u32, u32>) {
+    use air::{OutputRole, Role, Slot};
+    let fix = |s: &mut Slot| {
+        if let Slot::Constant(g) = *s
+            && let Some(&v) = slots.get(&g)
+        {
+            *s = Slot::Value(v);
+        }
+    };
+    let loc = |l: &mut air::Location| {
+        fix(&mut l.index);
+        fix(&mut l.count);
+    };
+    for a in &mut entry.arguments {
+        match &mut a.role {
+            Role::Buffer(b) | Role::IndirectBuffer(b) => loc(&mut b.location),
+            Role::IndirectConstant(l)
+            | Role::Texture { location: l, .. }
+            | Role::Sampler(l)
+            | Role::InstanceAccelerationStructure(l, _)
+            | Role::PrimitiveAccelerationStructure(l, _)
+            | Role::IntersectionFunctionTable(l, _)
+            | Role::VisibleFunctionTable(l, _)
+            | Role::CommandBuffer(l)
+            | Role::ComputePipelineState(l)
+            | Role::RenderPipelineState(l)
+            | Role::VertexInput(l)
+            | Role::PatchInput(l)
+            | Role::StageIn(Some(l)) => loc(l),
+            Role::Imageblock(i) => {
+                if let Some(l) = &mut i.location {
+                    loc(l);
+                }
+            }
+            Role::RenderTarget { index, .. } => fix(index),
+            _ => {}
+        }
+    }
+    for o in &mut entry.outputs {
+        if let OutputRole::RenderTarget { index, .. } = &mut o.role {
+            fix(index);
+        }
+    }
 }
 
 /// Read and decode a pipeline module.
