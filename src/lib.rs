@@ -10,9 +10,12 @@ pub mod bitcode;
 pub mod bitstream;
 pub mod cfg;
 pub mod ir;
+pub mod layout;
+pub mod mem;
 pub mod mtlb;
 pub mod num;
 pub mod reflect;
+pub mod wgsl;
 
 pub use api::*;
 pub use bitcode::parse_bitcode;

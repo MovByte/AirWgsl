@@ -664,20 +664,13 @@ impl std::error::Error for Refusal {}
 
 /// Compile the pipeline made of `stage_modules` with the state in `desc` for a device with `host`'s capabilities.
 ///
-/// The translation from AIR to WGSL is not implemented yet: every call returns a [`RefusalKind::NotImplemented`]
-/// refusal, which the executor reports as not implemented.
+/// Vertex, fragment and compute pipelines are lowered by [`crate::wgsl`] with the rules the lowering packages have
+/// registered; every construct without a lowering is a [`Refusal`] naming an item of the tracked refusal list
+/// ([`crate::wgsl::tracked`]).
 // Pipelines are compiled once per variant, so returning the refusal by value costs nothing that matters.
 #[allow(clippy::result_large_err)]
 pub fn compile(stage_modules: &[AirModule], desc: &PipelineDesc, host: &HostCaps) -> Result<Compiled, Refusal> {
-    let _ = (desc, host);
-    let function = stage_modules.iter().find_map(|m| m.entry.as_ref()).map(|e| e.function.clone());
-    Err(Refusal {
-        kind: RefusalKind::NotImplemented,
-        construct: "pipeline".into(),
-        location: function.map(|function| Location { function, instruction: None }),
-        reason: "the AIR to WGSL compiler is not implemented yet".into(),
-        reference: None,
-    })
+    crate::wgsl::compile(stage_modules, desc, host)
 }
 
 #[cfg(test)]
@@ -705,11 +698,10 @@ mod tests {
     }
 
     #[test]
-    fn compile_refuses_as_not_implemented() {
+    fn compile_refuses_an_unreadable_module() {
         let refusal = compile(&[module()], &compute_desc(), &HostCaps::default()).unwrap_err();
-        assert_eq!(refusal.kind, RefusalKind::NotImplemented);
-        assert_eq!(refusal.location.as_ref().map(|l| l.function.as_str()), Some("main0"));
-        assert!(refusal.to_string().contains("not implemented"));
+        assert_eq!(refusal.kind, RefusalKind::RejectedByDevice);
+        assert!(refusal.reason.starts_with("[compiler:module-unreadable]"), "{}", refusal);
     }
 
     #[test]
