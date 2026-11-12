@@ -303,6 +303,7 @@ pub fn lower_stage(
     let target = num::Target { rounding, host };
     let mut e = emit::FnEmit::new(m, fi, &inp.dl, mem, &analysis, rules, target, &iface, stage);
     e.records = inp.entry.arguments.clone();
+    e.bindings = bindings.cloned();
     e.prepare()?;
     if iface.early_fragment_tests
         && e.mem.regions.iter().any(|r| r.written && matches!(r.kind, RegionKind::Buffer { .. }))

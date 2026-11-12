@@ -74,6 +74,8 @@ pub struct FnEmit<'a> {
     pub records: Vec<crate::air::Argument>,
     /// Bindings rules asked for: (name, WGSL type, resource, source).
     pub resources: Vec<(String, String, crate::api::BindingResource, crate::api::BindingSource)>,
+    /// What the pipeline description binds to the stage.
+    pub bindings: Option<crate::api::StageBindings>,
 }
 
 fn fmf(f: crate::ir::FastMath) -> num::FastMath {
@@ -228,6 +230,7 @@ impl<'a> FnEmit<'a> {
             flags: BTreeSet::new(),
             records: Vec::new(),
             resources: Vec::new(),
+            bindings: None,
         }
     }
 
@@ -2022,5 +2025,25 @@ impl RuleCx for FnEmit<'_> {
 
     fn enable(&mut self, extension: &str) {
         self.enables.insert(extension.to_string());
+    }
+
+    fn stage(&self) -> MetalStage {
+        self.stage
+    }
+
+    fn bindings(&self) -> Option<&crate::api::StageBindings> {
+        self.bindings.as_ref()
+    }
+
+    fn host(&self) -> &crate::api::HostCaps {
+        self.target.host
+    }
+
+    fn prelude(&mut self, item: &'static str) -> Result<(), Refusal> {
+        self.need(item)
+    }
+
+    fn derivatives(&mut self) {
+        self.derivatives = true;
     }
 }

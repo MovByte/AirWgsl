@@ -17,7 +17,9 @@
 //! explicit set (tests register their own).
 
 use crate::air::{Argument, Output};
-use crate::api::{BindingResource, BindingSource, MetalStage, PipelineDesc, Refusal, UniformValue};
+use crate::api::{
+    BindingResource, BindingSource, HostCaps, MetalStage, PipelineDesc, Refusal, StageBindings, UniformValue,
+};
 use crate::ir::{InstId, Module, TypeId, Value};
 use crate::mem::access::Ptr;
 
@@ -82,6 +84,17 @@ pub trait RuleCx {
     fn require_feature(&mut self, feature: &str);
     /// A WGSL `enable` directive the code needs.
     fn enable(&mut self, extension: &str);
+    /// The stage being lowered.
+    fn stage(&self) -> MetalStage;
+    /// What the pipeline description binds to the stage at the draw or dispatch, when it lists the stage.
+    fn bindings(&self) -> Option<&StageBindings>;
+    /// The host's capabilities.
+    fn host(&self) -> &HostCaps;
+    /// A numerics library item the generated expressions call.
+    fn prelude(&mut self, item: &'static str) -> Result<(), Refusal>;
+    /// The code takes implicit derivatives (implicit-LOD sampling): the module is treated as the derivative functions'
+    /// modules are (see [`crate::wgsl`]).
+    fn derivatives(&mut self);
 }
 
 /// A rule lowering calls of some `air.*` functions.
