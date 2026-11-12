@@ -1294,6 +1294,36 @@ mod tests {
     }
 
     #[test]
+    fn one_flag_per_jump_target_keeps_uniform_jumps_uniform() {
+        // The structurer's jumps through flags: a non-uniform jump to the end of the first block, then a uniform one
+        // to the end of the second, before a barrier. With one variable for both, the first jump's reset under
+        // non-uniform control flow makes the second dispatch's test non-uniform; with a variable per target it is not.
+        let body = |set1: &str, test1: &str, reset1: &str, set2: &str, test2: &str, reset2: &str, decl: &str| {
+            format!(
+                "{} var i = 0u; loop {{ if i >= ro[0] {{ break; }} \
+                 switch 0i {{ default {{ switch 0i {{ default {{ if li == 0u {{ {} break; }} }} }} \
+                 if {} {{ {} break; }} }} }} \
+                 switch 0i {{ default {{ switch 0i {{ default {{ if ro[1] == 0u {{ {} break; }} }} }} \
+                 if {} {{ {} break; }} workgroupBarrier(); }} }} \
+                 i = i + 1u; }}",
+                decl, set1, test1, reset1, set2, test2, reset2
+            )
+        };
+        let shared = body("f = 1u;", "f == 1u", "f = 0u;", "f = 2u;", "f == 2u", "f = 0u;", "var f: u32 = 0u;");
+        assert_eq!(fails(&kernel(&shared)).len(), 1);
+        let separate = body(
+            "f1 = true;",
+            "f1",
+            "f1 = false;",
+            "f2 = true;",
+            "f2",
+            "f2 = false;",
+            "var f1: bool = false; var f2: bool = false;",
+        );
+        assert!(fails(&kernel(&separate)).is_empty());
+    }
+
+    #[test]
     fn helpers_are_transparent_unless_they_read_shared_state() {
         let src = format!(
             "{}fn pure(a: u32) -> u32 {{ var r = 0u; for (var i = 0u; i < a; i++) {{ r += i; }} return r; }}\n\

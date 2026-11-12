@@ -55,7 +55,7 @@ pub struct FnEmit<'a> {
     lines: Vec<String>,
     indent: usize,
     next: u32,
-    /// Function-scope declarations (hoisted values, phis, the flow flag, alloca arrays).
+    /// Function-scope declarations (hoisted values, phis, the jump flags, alloca arrays).
     pub decls: Vec<String>,
     pub prelude: Prelude,
     /// Library items of `lib.wgsl`.
@@ -66,6 +66,10 @@ pub struct FnEmit<'a> {
     pub module_items: BTreeMap<String, String>,
     /// Derivatives are lowered (the module disables the derivative uniformity diagnostic, see [`super`]).
     pub derivatives: bool,
+    /// The jump targets whose flag the body sets or tests: each has its own `bool` variable, so that WGSL's
+    /// uniformity analysis, which follows each variable's value through the control flow (WGSL 15.2.5), sees a jump
+    /// taken in uniform control flow as uniform even where another jump of the function is not.
+    flags: BTreeSet<u32>,
     /// The entry point's argument records.
     pub records: Vec<crate::air::Argument>,
     /// Bindings rules asked for: (name, WGSL type, resource, source).
@@ -221,6 +225,7 @@ impl<'a> FnEmit<'a> {
             enables: BTreeSet::new(),
             module_items: BTreeMap::new(),
             derivatives: false,
+            flags: BTreeSet::new(),
             records: Vec::new(),
             resources: Vec::new(),
         }
@@ -818,10 +823,14 @@ impl<'a> FnEmit<'a> {
             }
             Node::Break => self.push("break;".into()),
             Node::Continue => self.push("continue;".into()),
-            Node::SetFlag(k) => self.push(format!("aw_flow = {}u;", k)),
+            Node::SetFlag(k) => {
+                self.flags.insert(*k);
+                self.push(format!("aw_flow{} = true;", k));
+            }
             Node::Dispatch(arms) => {
                 for (k, (flag, body)) in arms.iter().enumerate() {
-                    let head = format!("if aw_flow == {}u {{", flag);
+                    self.flags.insert(*flag);
+                    let head = format!("if aw_flow{} {{", flag);
                     if k == 0 {
                         self.open(head);
                     } else {
@@ -829,7 +838,7 @@ impl<'a> FnEmit<'a> {
                         self.push(format!("}} else {}", head));
                         self.indent += 1;
                     }
-                    self.push("aw_flow = 0u;".into());
+                    self.push(format!("aw_flow{} = false;", flag));
                     self.nodes(body)?;
                 }
                 self.close();
@@ -1848,8 +1857,8 @@ impl<'a> FnEmit<'a> {
     pub fn body(&mut self, s: &Structured) -> R<(Vec<String>, Behavior)> {
         self.declare_phis()?;
         self.nodes(&s.body)?;
-        if s.uses_flag {
-            self.decls.push("var aw_flow: u32 = 0u;".into());
+        for k in std::mem::take(&mut self.flags) {
+            self.decls.push(format!("var aw_flow{}: bool = false;", k));
         }
         Ok((std::mem::take(&mut self.lines), Structured::behavior(&s.body)))
     }
