@@ -49,6 +49,11 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+# Cloudflare inserts a per-request challenge script into some pages (the Khronos registry);
+# a source marked strip = "cloudflare-challenge" is pinned and cached without it.
+CF_CHALLENGE_RE = re.compile(rb"<script>\(function\(\)\{function c\(\)\{var b=a\.contentDocument.*?</script>", re.S)
+
+
 def fetch(src_id, sources, cache):
     """Return the local path of a pinned source, downloading it if needed."""
     if not cache:
@@ -61,6 +66,8 @@ def fetch(src_id, sources, cache):
         req = urllib.request.Request(src["url"], headers={"User-Agent": "spec-tables/1"})
         with urllib.request.urlopen(req) as r:
             data = r.read()
+        if src.get("strip") == "cloudflare-challenge":
+            data = CF_CHALLENGE_RE.sub(b"", data)
         got = hashlib.sha256(data).hexdigest()
         if got != src["sha256"]:
             raise SystemExit("%s: %s has sha256 %s, pinned %s" % (src_id, src["url"], got, src["sha256"]))
