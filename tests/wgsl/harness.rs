@@ -155,8 +155,9 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
 }
 
-/// Error scopes are per device; runs are serialized so that each pops its own.
-static RUN: Mutex<()> = Mutex::new(());
+/// Error scopes are per device; runs are serialized so that each pops its own. Every test that pushes an error scope
+/// on [`gpu`]'s device holds this lock while its scope is open.
+pub static RUN: Mutex<()> = Mutex::new(());
 
 pub fn gpu() -> &'static Gpu {
     static G: OnceLock<Gpu> = OnceLock::new();

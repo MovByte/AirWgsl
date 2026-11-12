@@ -3,7 +3,7 @@
 //! device buffer. Every value is exact (pixel centers, the first vertex's flat values, integer formats), so the
 //! target and the buffer must be byte-identical on Metal, wgpu and Dawn.
 
-use super::harness::{air, case_dir, dawn_node, first_difference, gpu, tmp_dir};
+use super::harness::{RUN, air, case_dir, dawn_node, first_difference, gpu, tmp_dir};
 use airwgsl::api::*;
 use std::path::PathBuf;
 use std::process::Command;
@@ -102,6 +102,7 @@ fn compile_pipeline(bc: &[u8]) -> Compiled {
 
 fn wgpu_run(c: &Compiled, buffer: &[u8]) -> (Vec<u8>, Vec<u8>) {
     use wgpu::util::DeviceExt;
+    let _guard = RUN.lock().unwrap_or_else(|e| e.into_inner());
     let g = gpu();
     let d = &g.device;
     let scope = d.push_error_scope(wgpu::ErrorFilter::Validation);
