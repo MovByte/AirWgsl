@@ -247,9 +247,9 @@ def main():
         header_report = {}
         for b in sorted(header_builtins(args.target_headers)):
             keys = [k for k in claims if k == b or b.startswith(k + "_")]
-            proven = [1 for k in keys for g, i in claims[k]
-                      if accepted_by_variant.get((g, i)) and emitted_by_variant.get((g, i))]
-            header_report[b] = {"claimed_by": sum(len(claims[k]) for k in keys), "proven": len(proven)}
+            accepted = [(g, i) for k in keys for g, i in claims[k] if accepted_by_variant.get((g, i))]
+            header_report[b] = {"claimed_by": sum(len(claims[k]) for k in keys), "proven": len(accepted),
+                                "emits_air": any(emitted_by_variant.get(v) for v in accepted)}
 
     sys_meta = set(system["metadata_strings"])
     gen_meta = set(generated["metadata_strings"])
@@ -342,10 +342,12 @@ def main():
     if header_report is not None:
         lines += ["", "## Target header builtins", "",
                   f"{sum(1 for x in header_report.values() if x['proven'])} of {len(header_report)} `__metal_*` functions "
-                  "called by the target headers are claimed by an accepted variant that emits AIR.", ""]
+                  "called by the target headers are reached by an accepted variant "
+                  f"({sum(1 for x in header_report.values() if x['emits_air'])} of them through an `air.*` call; the "
+                  "others lower to plain LLVM instructions or constants).", ""]
         for b, x in sorted(header_report.items()):
             if not x["proven"]:
-                lines.append(f"- `__metal_{b}` (claimed by {x['claimed_by']} variants, none accepted with AIR)")
+                lines.append(f"- `__metal_{b}`: claimed by {x['claimed_by']} variants, none accepted")
     with open(os.path.join(args.out_dir, "coverage.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     p = out["views"][primary]["totals"]

@@ -31,8 +31,11 @@ Classification of each target string (``air.`` followed by name characters):
     Neither. Listed with its decomposition; it is not dropped.
 
 The family list is every family of an ``air.*`` function declared in the system corpus, plus
-every family of a target compiler string classified ``intrinsic``. Target strings in the other
-classes are listed with their decomposition for the coverage report. Families that only the generated
+every family of a target compiler string classified ``intrinsic``, plus the family of an
+``intrinsic-prefix`` string when it decomposes to the same family as the declared names it
+begins (``air.atomic_fetch_add_explicit_texture_2d`` names ``atomic_fetch_add_explicit``;
+``air.sample_texture`` names nothing). Target strings in the other classes are listed with
+their decomposition for the coverage report. Families that only the generated
 corpus declares are listed separately: they come from the newer compiler used to build the
 generated corpus, not from the target.
 """
@@ -104,6 +107,18 @@ def is_component_prefix(prefix, names_sorted):
     return False
 
 
+def prefix_names_family(prefix, names_sorted):
+    import bisect
+    family = decompose(prefix)[0]
+    k = bisect.bisect_left(names_sorted, prefix)
+    while k < len(names_sorted) and names_sorted[k].startswith(prefix):
+        rest = names_sorted[k][len(prefix):]
+        if (rest == "" or rest[0] in "._") and decompose(names_sorted[k])[0] == family:
+            return True
+        k += 1
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("out_json")
@@ -162,7 +177,13 @@ def main():
     for name in sorted(sys_callees):
         note(name, "system")
     for s, info in strings.items():
-        if info["kind"] == "intrinsic" and info["compiler"]:
+        if not info["compiler"]:
+            continue
+        if info["kind"] == "intrinsic":
+            note(s, "target")
+        elif info["kind"] == "intrinsic-prefix" and prefix_names_family(s, declared):
+            # The front end composes names from such stems; a stem names the family when it
+            # decomposes to the same family as the declared names it begins.
             note(s, "target")
     for name in sorted(gen_callees):
         note(name, "generated")
