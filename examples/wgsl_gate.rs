@@ -6,9 +6,11 @@
 //!
 //! `CORPUS_ROOT` is the output directory of `corpus/pipeline.py`: the generated corpus is read from
 //! `build/modules.tsv` (modules under `build/`), the system corpus from `system/modules.tsv` (modules in
-//! `system/bitcode/<sha256>.bc`). Each function is lowered on its own ([`airwgsl::wgsl::compile_entry`]): a kernel
-//! with a 64 x 1 x 1 threadgroup and 4096 bytes for each threadgroup buffer index, a vertex or fragment function with
-//! its own varyings.
+//! `system/bitcode/<sha256>.bc`). Each function is canonicalized ([`airwgsl::wgsl::canonical_input`]: the module on
+//! its own, every function constant set to zero bytes, as `examples/reflect_corpus.rs` sets them for real Metal) and
+//! lowered on its own ([`airwgsl::wgsl::compile_entry`]): a kernel with a 64 x 1 x 1 threadgroup and 4096 bytes for
+//! each threadgroup buffer index, a vertex or fragment function with its own varyings. With `AW_RAW` set, functions
+//! are lowered as they are read, without canonicalization (canonical form is then checked, not produced).
 //!
 //! With `AW_TINT` naming Dawn's `tint` executable, each distinct generated module is also checked by Tint
 //! (`tint --format wgsl`: parsing, resolution and the uniformity analysis).
@@ -176,7 +178,12 @@ fn lower(decoded: &Result<airwgsl::air::AirModule, airwgsl::Refusal>, function: 
             "a function that is not an entry point is linked into one",
         ));
     };
-    let inp = match wgsl::input_of(air.clone(), &entry.name, entry.stage.function_type()) {
+    let inp = if std::env::var_os("AW_RAW").is_some() {
+        wgsl::input_of(air.clone(), &entry.name, entry.stage.function_type())
+    } else {
+        wgsl::canonical_input(air, &[], &entry.name, entry.stage.function_type(), &zero_constants(air))
+    };
+    let inp = match inp {
         Ok(i) => i,
         Err(r) => return refused(&r),
     };
@@ -203,6 +210,23 @@ fn lower(decoded: &Result<airwgsl::air::AirModule, airwgsl::Refusal>, function: 
         },
         Err(r) => refused(&r),
     }
+}
+
+/// Zero bytes for every function constant of a module, typed as the constant.
+fn zero_constants(air: &airwgsl::air::AirModule) -> Vec<airwgsl::api::FunctionConstant> {
+    let Ok(dl) = airwgsl::ir::layout::DataLayout::parse(&air.ir.datalayout) else { return Vec::new() };
+    air.function_constants
+        .iter()
+        .map(|c| {
+            let ty = air.ir.globals[c.global as usize].value_type;
+            airwgsl::api::FunctionConstant {
+                index: c.index as u64,
+                name: None,
+                data_type: airwgsl::passes::specialize::data_type(&c.type_name).unwrap_or(0),
+                value: vec![0; dl.store_size(&air.ir.types, ty).unwrap_or(0) as usize],
+            }
+        })
+        .collect()
 }
 
 fn main() {
