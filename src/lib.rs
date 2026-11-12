@@ -8,6 +8,7 @@ pub mod air;
 pub mod api;
 pub mod bitcode;
 pub mod bitstream;
+pub mod cfg;
 pub mod ir;
 pub mod mtlb;
 pub mod num;
