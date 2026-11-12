@@ -113,8 +113,10 @@ pub struct Memory {
     /// Region sets of pointer values and of integers that carry a pointer's provenance (`ptrtoint` and arithmetic on
     /// it). Function-local values only; constants and globals are computed on demand.
     prov: HashMap<Value, BTreeSet<RegionId>>,
-    /// Pointer values (and provenance integers converted back) whose regions cannot be bounded.
+    /// Pointer values (and provenance integers converted back) whose regions cannot be bounded, with the refusal that
+    /// names where the unbounded pointer comes from.
     unbounded: HashSet<Value>,
+    cause: HashMap<Value, Refusal>,
     arg_region: HashMap<u32, RegionId>,
     global_region: HashMap<u32, RegionId>,
     alloca_region: HashMap<InstId, RegionId>,
@@ -155,6 +157,7 @@ impl Memory {
             }],
             prov: HashMap::new(),
             unbounded: HashSet::new(),
+            cause: HashMap::new(),
             arg_region: HashMap::new(),
             global_region: HashMap::new(),
             alloca_region: HashMap::new(),
@@ -338,6 +341,8 @@ impl Memory {
                     set = Some(BTreeSet::from([NULL]));
                 }
                 if unbounded && is_ptr && self.unbounded.insert(me) {
+                    let cause = self.cause_of(m, fi, id);
+                    self.cause.insert(me, cause);
                     changed = true;
                 }
                 if let Some(s) = set {
@@ -398,9 +403,61 @@ impl Memory {
         }
     }
 
+    /// Why instruction `id`'s pointer result is unbounded: the operand's cause for pointers derived from one, the
+    /// call for a pointer a call returns, the load for one read from memory, the `inttoptr` otherwise.
+    fn cause_of(&self, m: &Module, fi: usize, id: InstId) -> Refusal {
+        let f = &m.functions[fi];
+        let inst = f.inst(id);
+        let loc = Some(crate::api::Location {
+            function: f.common.name.clone(),
+            instruction: Some(crate::ir::print::print_instruction(m, fi, id)),
+        });
+        for v in inst.op.operands() {
+            if let Some(c) = self.cause.get(&v) {
+                return c.clone();
+            }
+        }
+        match &inst.op {
+            Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } => {
+                let callee = &m.functions[*c as usize];
+                let name = callee.common.name.clone();
+                if !callee.is_declaration() {
+                    tracked::refuse(
+                        "non-canonical-input",
+                        name,
+                        loc,
+                        "a call of a defined function returns the pointer",
+                    )
+                } else if let Some(fam) = tracked::family_of(&name) {
+                    tracked::refuse_family(fam, name, loc)
+                } else {
+                    tracked::refuse(
+                        "foreign-callee",
+                        name,
+                        loc,
+                        "a call of a function that is not linked in returns the pointer",
+                    )
+                }
+            }
+            Op::Load { .. } => tracked::refuse("pointer-in-memory", "load ptr", loc, "a pointer loaded from memory"),
+            Op::ExtractValue { .. } | Op::ExtractElement { .. } => {
+                tracked::refuse("pointer-aggregate", "extract", loc, "a pointer taken out of an aggregate value")
+            }
+            _ => tracked::refuse(
+                "unbounded-pointer-provenance",
+                "inttoptr",
+                loc,
+                "a pointer whose provenance cannot be bounded to the regions the shader can access",
+            ),
+        }
+    }
+
     /// The regions a pointer value may point into, or a refusal when they cannot be bounded.
     pub fn regions(&self, m: &Module, v: Value) -> Result<Vec<RegionId>, Refusal> {
         if self.is_unbounded(m, v) {
+            if let Some(c) = self.cause.get(&v) {
+                return Err(c.clone());
+            }
             return Err(tracked::refuse(
                 "unbounded-pointer-provenance",
                 "inttoptr",

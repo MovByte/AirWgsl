@@ -114,6 +114,16 @@ fn check_canonical(m: &Module, fi: usize) -> R<()> {
         return Err(tracked::refuse_family("static-init", "llvm.global_ctors", loc()));
     }
     for inst in &f.insts {
+        if let Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } = &inst.op
+            && !m.functions[*c as usize].is_declaration()
+        {
+            return Err(tracked::refuse(
+                "non-canonical-input",
+                m.functions[*c as usize].common.name.clone(),
+                loc(),
+                "a call of a defined function (inlining is canonicalization's)",
+            ));
+        }
         for v in inst.op.operands() {
             if let Value::Global(GlobalId::Var(g)) = v {
                 let gv = &m.globals[g as usize];
