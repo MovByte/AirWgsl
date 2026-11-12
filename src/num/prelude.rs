@@ -22,6 +22,8 @@ const SOURCES: &[(&str, &str)] = &[
     ("common.wgsl", include_str!("wgsl/common.wgsl")),
     ("int.wgsl", include_str!("wgsl/int.wgsl")),
     ("half.wgsl", include_str!("wgsl/half.wgsl")),
+    ("srgb.wgsl", include_str!("wgsl/srgb.wgsl")),
+    ("pack.wgsl", include_str!("wgsl/pack.wgsl")),
 ];
 
 /// One top-level library item.

@@ -136,6 +136,11 @@ fn signature(name: &str) -> Option<(Vec<Ty>, Ty)> {
     let i32t = Ty::scalar(Scalar::I32);
     let n = |k: usize| vec![last; k];
     Some(match head {
+        "pack" | "unpack" => {
+            let fmt = parts[1..parts.len() - 1].join(".");
+            let packed = Ty::scalar(if fmt == "unorm.rgb565" { Scalar::I16 } else { Scalar::I32 });
+            if head == "pack" { (vec![last], packed) } else { (vec![packed], last) }
+        }
         "convert" => {
             if parts.len() != 5 {
                 return None;
@@ -172,7 +177,7 @@ fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
         }
         if let Some(v) = line.strip_prefix("family = \"") {
             let fam = v.trim_end_matches('"');
-            if ["math-float", "math-geometric", "integer", "conversion", "relational", "derivative"].contains(&fam) {
+            if ["math-float", "math-geometric", "integer", "conversion", "relational", "derivative", "pack-unpack"].contains(&fam) {
                 names.push((cur_name.clone(), fam.to_string()));
             }
         }
@@ -211,7 +216,10 @@ fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
                 Err(e) => {
                     *tally.entry(format!("{} refused: {}", fam, e.reason)).or_insert(0) += 1;
                     assert!(
-                        e.reason.contains("rounding mode") || e.reason.contains("mul24 and mad24") || e.reason.contains("derivative of an integer"),
+                        e.reason.contains("rounding mode")
+                            || e.reason.contains("mul24 and mad24")
+                            || e.reason.contains("derivative of an integer")
+                            || e.reason.contains("has no MSL function"),
                         "{}: unexpected refusal {}",
                         name,
                         e

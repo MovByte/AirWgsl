@@ -731,9 +731,15 @@ fn int_lane(c: &mut Ctx, f: &str, sg: Option<bool>, s: Scalar, a: &[String]) -> 
             if n != 32 {
                 return Err(c.malformed("mul24 and mad24 are defined for 32-bit integers (MSL Table 6.2)"));
             }
-            // MSL Table 6.2: the 32-bit product of operands in the 24-bit range; outside it the result is
-            // implementation-defined, and the full 32-bit product is this implementation's definition.
-            let p = format!("({} * {})", a[0], a[1]);
+            // MSL Table 6.2: the product of the low 24 bits; outside the 24-bit range the result is
+            // implementation-defined, and Metal multiplies the low 24 bits, sign-extended for the signed form
+            // (measured, tests/num/data/metal-pack.txt), which this reproduces.
+            let p = if sg == Some(true) {
+                c.need("nm_sext")?;
+                format!("u32(nm_sext({}, 24u) * nm_sext({}, 24u))", a[0], a[1])
+            } else {
+                format!("(({} & 0xffffffu) * ({} & 0xffffffu))", a[0], a[1])
+            };
             if f == "mad24" { format!("({} + {})", p, a[2]) } else { p }
         }
         _ => return Err(c.refuse(RefusalKind::NotImplemented, format!("integer function {}", f), None)),
@@ -883,7 +889,7 @@ fn lower_air(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], ret: Option<Ty>,
                 Err(c.malformed("a derivative of an integer type"))
             }
         }
-        "pack" | "unpack" => Err(c.refuse(RefusalKind::NotImplemented, "pack and unpack are lowered in a later change", None)),
+        "pack" | "unpack" => lower_pack(c, head == "pack", &parts[1..], b, tys, ret),
         _ => {
             // Integer functions: air.<fn>.<s|u>.<type> or air.<fn>.<type>.
             if let Some(&(f, arity)) = INT_FNS.iter().find(|(f, _)| *f == head) {
@@ -987,4 +993,113 @@ fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], ret: Option<Ty>
         }
         _ => Err(not_numeric(c)),
     }
+}
+
+// Pack and unpack -----------------------------------------------------------------------------------------------------
+
+/// A packed format of MSL 6.15: its components (bits each, largest code, signed), and whether rgb uses sRGB.
+struct PackFmt {
+    comps: &'static [(u32, u32)],
+    signed: bool,
+    srgb: bool,
+    /// The packed type: i32, or i16 for 565.
+    packed: Scalar,
+}
+
+fn pack_format(parts: &[&str]) -> Option<(PackFmt, &'static str)> {
+    const C4X8: &[(u32, u32)] = &[(8, 255), (8, 255), (8, 255), (8, 255)];
+    const S4X8: &[(u32, u32)] = &[(8, 127), (8, 127), (8, 127), (8, 127)];
+    const C2X16: &[(u32, u32)] = &[(16, 65535), (16, 65535)];
+    const S2X16: &[(u32, u32)] = &[(16, 32767), (16, 32767)];
+    const C1010102: &[(u32, u32)] = &[(10, 1023), (10, 1023), (10, 1023), (2, 3)];
+    const C565: &[(u32, u32)] = &[(5, 31), (6, 63), (5, 31)];
+    let f = |comps, signed, srgb, packed| PackFmt { comps, signed, srgb, packed };
+    Some(match parts {
+        ["unorm4x8"] => (f(C4X8, false, false, Scalar::I32), "unorm4x8"),
+        ["snorm4x8"] => (f(S4X8, true, false, Scalar::I32), "snorm4x8"),
+        ["unorm4x8", "srgb"] => (f(C4X8, false, true, Scalar::I32), "unorm4x8.srgb"),
+        ["unorm2x16"] => (f(C2X16, false, false, Scalar::I32), "unorm2x16"),
+        ["snorm2x16"] => (f(S2X16, true, false, Scalar::I32), "snorm2x16"),
+        ["unorm", "rgb10a2"] => (f(C1010102, false, false, Scalar::I32), "unorm.rgb10a2"),
+        ["unorm", "rgb565"] => (f(C565, false, false, Scalar::I16), "unorm.rgb565"),
+        _ => return None,
+    })
+}
+
+fn lower_pack(c: &mut Ctx, pack: bool, parts: &[&str], b: &[String], tys: &[Ty], ret: Option<Ty>) -> R<Out> {
+    let (suffix, fmt_parts) = match parts.split_last() {
+        Some((s, f)) if parse_suffix(s).is_some() => (*s, f),
+        _ => return Err(c.malformed("pack or unpack without a type suffix")),
+    };
+    let Some((fmt, _)) = pack_format(fmt_parts) else {
+        // The other names of the front end's table (1x8, 2x8, 1x16, 4x16, rg11b10f, rgb9e5) have no MSL function
+        // at the target's language version that produces them.
+        return Err(c.refuse(
+            RefusalKind::NotImplemented,
+            format!("{} {} has no MSL function at the target's language version", if pack { "pack" } else { "unpack" }, fmt_parts.join(".")),
+            Some("MSL 6.15"),
+        ));
+    };
+    let vty = parse_suffix(suffix).unwrap_or(Ty::scalar(Scalar::F32));
+    if !vty.scalar.is_float() || vty.lanes as usize != fmt.comps.len() {
+        return Err(c.malformed(format!("format with type {}", suffix)));
+    }
+    let half = vty.scalar == Scalar::F16;
+    if pack {
+        if b.len() != 1 || tys[0] != vty {
+            return Err(c.malformed("pack takes one float vector"));
+        }
+        if ret.is_some_and(|r| r != Ty::scalar(fmt.packed)) {
+            return Err(c.malformed("pack result type"));
+        }
+        let mut shift = 0;
+        let mut terms = Vec::new();
+        for (i, &(bits, maxv)) in fmt.comps.iter().enumerate() {
+            let mut x = lane(&b[0], vty, i as u32);
+            if half {
+                c.need("nm_f16_to_f32")?;
+                x = format!("nm_f16_to_f32({})", x);
+            }
+            let code = if fmt.srgb && i < 3 {
+                c.need("nm_srgb_code")?;
+                format!("nm_srgb_code({})", x)
+            } else if fmt.signed {
+                c.need("nm_snorm_code")?;
+                format!("nm_snorm_code({}, {}u, {}u)", x, maxv, bits)
+            } else {
+                c.need("nm_unorm_code")?;
+                format!("nm_unorm_code({}, {}u)", x, maxv)
+            };
+            terms.push(if shift == 0 { code } else { format!("({} << {}u)", code, shift) });
+            shift += bits;
+        }
+        return Ok(out(format!("({})", terms.join(" | ")), exact()));
+    }
+    if b.len() != 1 || tys[0] != Ty::scalar(fmt.packed) {
+        return Err(c.malformed("unpack takes one packed integer"));
+    }
+    if ret.is_some_and(|r| r != vty) {
+        return Err(c.malformed("unpack result type"));
+    }
+    let mut shift = 0;
+    let mut lanes = Vec::new();
+    let fl = if half { "f16" } else { "f32" };
+    for (i, &(bits, maxv)) in fmt.comps.iter().enumerate() {
+        let code = format!("(({} >> {}u) & {}u)", b[0], shift, (1u32 << bits) - 1);
+        lanes.push(if fmt.srgb && i < 3 {
+            let f = format!("nm_srgb_{}", fl);
+            c.need(&f)?;
+            format!("{}({})", f, code)
+        } else if fmt.signed {
+            let f = format!("nm_snorm_{}", fl);
+            c.need(&f)?;
+            format!("{}({}, {}u, {}u)", f, code, maxv, bits)
+        } else {
+            let f = format!("nm_unorm_{}", fl);
+            c.need(&f)?;
+            format!("{}({}, {}u)", f, code, maxv)
+        });
+        shift += bits;
+    }
+    Ok(out(build(vty, lanes), exact()))
 }

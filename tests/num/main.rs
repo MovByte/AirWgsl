@@ -11,6 +11,7 @@ mod inputs;
 mod lower;
 mod math;
 mod metal_special;
+mod pack;
 mod reference;
 mod selftest;
 mod softfloat;
