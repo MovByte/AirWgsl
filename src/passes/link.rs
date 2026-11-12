@@ -1,11 +1,12 @@
 //! Linking: the stage module's declarations resolved against the definitions of the other modules (Metal's linked
 //! functions and preloaded libraries), lazily, as LLVM's IR linker does with only the needed definitions.
 //!
-//! The rules are LLVM's for one direction of `IRMover`: a declaration in the result with external linkage takes the
-//! definition of the first other module that defines that name with external linkage, together with everything
-//! that definition refers to (internal and private globals are copied under unique names). A name defined in the
-//! stage module stays its own; two modules both defining a name with non-discardable linkage (`external`,
-//! `weak`...) where the stage module only declares it take the first.
+//! A declaration in the result with non-local linkage takes the definition of the first other module (in the order
+//! given) that defines that name with non-local linkage, together with everything that definition refers to:
+//! internal and private globals are copied under unique names, and names the result already has resolve to the
+//! result's own. A name the stage module defines stays its own definition. Linking repeats until no declaration can
+//! be resolved, so definitions brought in may bring in more. Modules with a data layout other than the stage
+//! module's are refused.
 
 use crate::api::{Refusal, RefusalKind};
 use crate::ir::{GlobalId, Linkage, Module};

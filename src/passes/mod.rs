@@ -24,30 +24,47 @@
 //!
 //! # The canonical form
 //!
-//! What [`Canonical`] guarantees to the stages after it:
+//! What [`Canonical`] guarantees to the stages after it (the guarantees marked *checked* are verified before
+//! [`canonicalize`] returns; a violation is a refusal, never a silently different form):
 //!
-//! - The module defines exactly one function, the entry point, at index [`Canonical::function`]. Every other
-//!   function is a declaration: an `air.*` or `llvm.*` intrinsic, or an external symbol that no linked module defines
-//!   and that is only referred to, never called (a call of one is a refusal).
-//! - No call in the function calls a defined function; no `air.is_function_constant_defined` or
-//!   `air.normalize_function_constant_predicate` call remains; no load reads an `air.fc_initializer` global; no
-//!   `llvm.lifetime.*`, `llvm.assume`, `llvm.experimental.noalias.scope.decl` or `llvm.dbg.*` call remains.
-//! - Globals keep their address spaces; constant-address-space globals the static initializers wrote are `constant`
-//!   with the computed initializer. `llvm.global_ctors` and `llvm.compiler.used` are gone.
+//! - The module defines exactly one function, the entry point, at index [`Canonical::function`] (*checked*). Every
+//!   other function is a declaration: an `air.*` or `llvm.*` intrinsic, an external symbol that only metadata names
+//!   (a function an entry-point record refers to, such as a stitching trait function, is kept as an external
+//!   declaration without its body), or one the code refers to without calling it. Code that refers to a defined
+//!   function as a value (a function pointer) is refused.
+//! - The function calls only declarations of `air.*` and `llvm.*` functions (*checked*: a direct call of anything
+//!   else is refused, naming it), and functions through pointers (visible function tables) stay calls through
+//!   pointers. No `air.is_function_constant_defined` or `air.normalize_function_constant_predicate`
+//!   call remains, nor any `llvm.lifetime.*`, `llvm.assume`, `llvm.experimental.noalias.scope.decl` or `llvm.dbg.*`
+//!   call (*checked*).
+//! - Function constants are values: an `air.fc_initializer` global holds the constant's value as its initializer (or
+//!   `undef` when it has none) and is `constant`; a load of one through a constant pointer is folded (*checked*).
+//!   Constant-address-space globals are `constant` with the contents the static initializers left in them, when no
+//!   function other than the initializers writes that address space. `llvm.global_ctors` and `llvm.compiler.used`
+//!   are gone.
 //! - The entry point's record in the AIR entry-point metadata (`!air.kernel`, `!air.vertex`, `!air.fragment`, ...)
 //!   is kept with the operands it refers to (argument records, and the `__metal_implicit_fc_pred_*` globals of
-//!   arguments that carry a function-constant predicate, whose initializers now hold the predicate values: see
-//!   [`specialize::predicate_present`]); the other module-level AIR metadata (`!air.compile_options`,
-//!   `!air.version`, `!air.language_version`, `!air.sampler_states`, `!llvm.module.flags`, ...) is copied, with
-//!   references to globals that were not kept turned into null operands. The AIR metadata decoder (package S2) reads
-//!   these from the canonical module.
-//! - Stack objects: every `alloca` is in the entry block with a constant count. Those left are accessed in ways that
-//!   need memory: dynamic indices, escaping pointers (calls, pointer stores), or mixed types over the same bytes.
-//! - The control flow graph has only reachable blocks; SSA values (phis included) stay as LLVM defines them; `freeze`
-//!   stays.
-//! - Constants are LLVM's canonical constants; no instruction has all-constant operands where the interpreter
-//!   defines its result exactly (instructions whose result the semantics leave open are kept, not folded to a
-//!   choice, except `freeze`, whose result is one fixed value: it folds to zero bits for undef or poison).
+//!   arguments that carry a function-constant predicate, whose initializers now hold the predicate values: an
+//!   argument is present exactly when [`specialize::predicate_present`] says so); the other module-level AIR
+//!   metadata (`!air.compile_options`, `!air.version`, `!air.language_version`, `!air.sampler_states`,
+//!   `!llvm.module.flags`, ...) is copied, with references to globals that were not kept turned into null operands.
+//!   The AIR metadata decoder (package S2) reads these from the canonical module.
+//! - Stack objects left (`alloca`) are those accessed in ways that need memory: dynamic indices, pointers that
+//!   escape (into calls, stores of the pointer, `ptrtoint`, `select` or `phi`), volatile or atomic accesses, or
+//!   accesses of different types over overlapping bytes. The static allocas of inlined functions are in the entry
+//!   block; other allocas stay where the front end put them.
+//! - The control flow graph has only reachable blocks, and a block whose only predecessor ends in an unconditional
+//!   branch to it is merged into it. SSA values (phis included) stay as LLVM defines them; `freeze` stays.
+//! - Constants are LLVM's canonical constants. Arithmetic, comparisons, casts other than `ptrtoint`, vector and
+//!   aggregate operations, `select`, `freeze`, calls of declarations without memory effects, and loads from constant
+//!   globals are folded whenever all their operands are constants and the interpreter determines the result exactly:
+//!   a defined value without choice bits, a wholly `undef` value, or poison. Results the semantics leave open (a
+//!   NaN's sign and payload, the sign of a zero under `nsz`, `llvm.fmuladd`'s fusion) are not chosen, except
+//!   `freeze`'s, which is one fixed value: zero bits where its operand is undef or poison. Results that depend on
+//!   where a global lies (`ptrtoint`, ordered comparisons of pointers) are not folded.
+//! - The alias-analysis metadata (`!alias.scope`, `!noalias`) of inlined instructions is dropped (it would otherwise
+//!   share one callee's scopes between its copies); other metadata attachments stay; `!dbg` locations of inlined
+//!   instructions are dropped.
 
 pub mod copy;
 pub mod dce;
@@ -199,20 +216,47 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
             ));
         }
     }
+    let fc_globals: Vec<u32> = specialize::records(m).iter().map(|r| r.global).collect();
     for b in &func.blocks {
         for &id in &b.insts {
-            if let crate::ir::Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } = &func.inst(id).op {
-                let callee = &m.functions[*c as usize].common.name;
-                if !callee.starts_with("air.") && !callee.starts_with("llvm.") {
+            match &func.inst(id).op {
+                crate::ir::Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } => {
+                    let callee = &m.functions[*c as usize].common.name;
+                    if !callee.starts_with("air.") && !callee.starts_with("llvm.") {
+                        return Err(refusal_at(
+                            m,
+                            f,
+                            id,
+                            RefusalKind::NotImplemented,
+                            &format!("call of @{}", callee),
+                            "no linked module defines the function, and it is not an intrinsic",
+                        ));
+                    }
+                    let gone = ["air.is_function_constant_defined", "air.normalize_function_constant_predicate"];
+                    let gone_llvm =
+                        ["llvm.lifetime.", "llvm.assume", "llvm.experimental.noalias.scope.decl", "llvm.dbg."];
+                    if gone.iter().any(|g| callee.starts_with(g)) || gone_llvm.iter().any(|g| callee.starts_with(g)) {
+                        return Err(refusal_at(
+                            m,
+                            f,
+                            id,
+                            RefusalKind::NotImplemented,
+                            &format!("call of @{}", callee),
+                            "the canonical form has no such call, but the passes left it",
+                        ));
+                    }
+                }
+                crate::ir::Op::Load { ptr: Value::Global(GlobalId::Var(g)), .. } if fc_globals.contains(g) => {
                     return Err(refusal_at(
                         m,
                         f,
                         id,
                         RefusalKind::NotImplemented,
-                        &format!("call of @{}", callee),
-                        "no linked module defines the function, and it is not an intrinsic",
+                        "function constant load",
+                        "a load of a function constant global, which the passes fold",
                     ));
                 }
+                _ => {}
             }
         }
     }

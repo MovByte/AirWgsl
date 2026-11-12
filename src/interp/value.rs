@@ -91,7 +91,7 @@ impl Val {
         }
     }
 
-    /// Whether any leaf has a poison, undef or choice part.
+    /// Whether every leaf is well defined and holds no choice bit.
     pub fn is_exact(&self) -> bool {
         match self {
             Val::S(s) => s.is_defined() && s.choice == 0,
