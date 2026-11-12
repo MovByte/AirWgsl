@@ -3,5 +3,7 @@
 //! required. `AW_DAWN_NODE` names Dawn's `dawn.node`; without it the Dawn runs are reported as not done.
 
 mod harness;
+mod hooks;
 mod kernels;
 mod layouts;
+mod render;
