@@ -154,6 +154,33 @@ fn static_initializers_fold_into_constants() {
     assert!(c.module.functions.iter().enumerate().all(|(i, f)| i == c.function || f.is_declaration()));
 }
 
+/// The values reflection takes from canonicalization, through the AIR semantic layer's typed records.
+#[test]
+fn reflection_inputs_come_from_the_canonical_function() {
+    let air = airwgsl::air::AirModule::decode(fixture(include_bytes!("ir/static_init.bc"))).unwrap();
+    let entry = air.entry_point("test").unwrap().clone();
+    let with = |i: u64, ty: u64, v: &[u8]| FunctionConstant { index: i, name: None, data_type: ty, value: v.to_vec() };
+    let c =
+        passes::canonicalize_air(std::slice::from_ref(&air), &entry, &[with(0, 29, &[5, 0, 0, 0]), with(1, 53, &[1])])
+            .unwrap();
+    let inputs = passes::reflection::inputs(&c);
+    let global = |n: &str| air.ir.globals.iter().position(|g| g.common.name == n).unwrap() as u32;
+    // The predicate is fc_b (true); the optional argument's buffer index is fc_i + 1 = 6; it is unused.
+    assert_eq!(inputs.predicates.get(&global("pred")), Some(&true));
+    assert_eq!(inputs.slots.get(&global("slot")), Some(&6));
+    assert_eq!(inputs.unused_arguments.iter().copied().collect::<Vec<_>>(), vec![1]);
+    let r = airwgsl::reflect::stage(&air, &entry, &inputs, airwgsl::reflect::StageInput::None).unwrap();
+    let opt = r.arguments.iter().find(|a| a.name == "opt").unwrap();
+    assert_eq!((opt.index, opt.active), (6, false));
+    let out = r.arguments.iter().find(|a| a.name == "out").unwrap();
+    assert!(out.active);
+    // Unset, the predicate drops the argument, and the slot is the default 7 plus 1.
+    let c = passes::canonicalize_air(std::slice::from_ref(&air), &entry, &[]).unwrap();
+    let inputs = passes::reflection::inputs(&c);
+    assert_eq!(inputs.predicates.get(&global("pred")), Some(&false));
+    assert_eq!(inputs.slots.get(&global("slot")), Some(&8));
+}
+
 /// The specialization rules against the measured Metal behavior.
 #[test]
 fn function_constants_follow_metal() {

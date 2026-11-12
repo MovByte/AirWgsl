@@ -46,7 +46,8 @@ pub struct ConstantRecord {
     pub index: u64,
 }
 
-/// The function constants a module declares.
+/// The function constants a module declares, read from its `!air.function_constants` records (for modules the AIR
+/// semantic layer has not decoded; [`super::canonicalize_air`] uses that layer's records).
 pub fn records(m: &Module) -> Vec<ConstantRecord> {
     let mut out = Vec::new();
     for nm in m.named_metadata.iter().filter(|n| n.name == "air.function_constants") {
@@ -110,12 +111,15 @@ pub fn predicate_present(bytes: &[Byte]) -> bool {
 /// Gives the module's function constants their values and resolves `air.is_function_constant_defined`. Returns the
 /// names of the globals that got values.
 #[allow(clippy::result_large_err)]
-pub fn specialize(m: &mut Module, constants: &[FunctionConstant]) -> Result<HashSet<String>, Refusal> {
-    let recs = records(m);
+pub fn specialize(
+    m: &mut Module,
+    recs: &[ConstantRecord],
+    constants: &[FunctionConstant],
+) -> Result<HashSet<String>, Refusal> {
     let dl =
         DataLayout::parse(&m.datalayout).map_err(|e| refusal(RefusalKind::RejectedByDevice, "datalayout", "", &e))?;
     let mut defined = HashSet::new();
-    for r in &recs {
+    for r in recs {
         let value = constants
             .iter()
             .find(|c| c.name.as_deref() == Some(r.name.as_str()))

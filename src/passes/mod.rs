@@ -72,6 +72,7 @@ pub mod fold;
 pub mod inline;
 pub mod link;
 pub mod mem2reg;
+pub mod reflection;
 pub mod specialize;
 pub mod sroa;
 pub mod static_init;
@@ -87,6 +88,10 @@ pub struct Canonical {
     pub module: Module,
     /// Index of the entry point in `module.functions`.
     pub function: usize,
+    /// Where the stage module's global variables went: stage-module index to `module.globals` index, for the ones
+    /// the canonical module keeps. (Linking appends to the stage module, so its own indices stay valid through the
+    /// passes.)
+    pub globals: std::collections::BTreeMap<u32, u32>,
 }
 
 /// Fixed-point iterations of SROA, mem2reg, folding and DCE before canonicalization gives up.
@@ -109,6 +114,42 @@ pub const ENTRY_LISTS: &[&str] = &[
 // Refusals go back to the caller by value, as everywhere in the compiler.
 #[allow(clippy::result_large_err)]
 pub fn canonicalize(modules: &[Module], entry: &str, constants: &[FunctionConstant]) -> Result<Canonical, Refusal> {
+    let records = modules.first().map(specialize::records).unwrap_or_default();
+    canonicalize_with(modules, entry, &records, constants)
+}
+
+/// [`canonicalize`] for modules the AIR semantic layer decoded: the function constants are its typed records (the
+/// IR the canonicalization works on is each module's [`crate::air::AirModule::ir`]).
+#[allow(clippy::result_large_err)]
+pub fn canonicalize_air(
+    modules: &[crate::air::AirModule],
+    entry: &crate::air::EntryPoint,
+    constants: &[FunctionConstant],
+) -> Result<Canonical, Refusal> {
+    let Some(first) = modules.first() else {
+        return Err(refusal(RefusalKind::RejectedByDevice, "pipeline", &entry.name, "no modules"));
+    };
+    let records: Vec<specialize::ConstantRecord> = first
+        .function_constants
+        .iter()
+        .map(|c| specialize::ConstantRecord {
+            global: c.global,
+            type_name: c.type_name.clone(),
+            name: c.name.clone(),
+            index: c.index as u64,
+        })
+        .collect();
+    let irs: Vec<Module> = modules.iter().map(|a| a.ir.clone()).collect();
+    canonicalize_with(&irs, &entry.name, &records, constants)
+}
+
+#[allow(clippy::result_large_err)]
+fn canonicalize_with(
+    modules: &[Module],
+    entry: &str,
+    records: &[specialize::ConstantRecord],
+    constants: &[FunctionConstant],
+) -> Result<Canonical, Refusal> {
     let Some(first) = modules.first() else {
         return Err(refusal(RefusalKind::RejectedByDevice, "pipeline", entry, "no modules"));
     };
@@ -117,7 +158,7 @@ pub fn canonicalize(modules: &[Module], entry: &str, constants: &[FunctionConsta
         .function_by_name(entry)
         .filter(|&i| !m.functions[i].is_declaration())
         .ok_or_else(|| refusal(RefusalKind::RejectedByDevice, "function", entry, "no linked module defines it"))?;
-    specialize::specialize(&mut m, constants)?;
+    specialize::specialize(&mut m, records, constants)?;
     static_init::run(&mut m)?;
     inline::inline_all(&mut m, f)?;
     simplify(&mut m, f)?;
@@ -188,7 +229,15 @@ pub fn extract(m: &Module, f: usize) -> Canonical {
     let mut all: Vec<NamedMetadata> = lists.into_iter().chain(others).collect();
     all.sort_by_key(|n| order.iter().position(|o| *o == n.name).unwrap_or(usize::MAX));
     out.named_metadata = all;
-    Canonical { module: out, function: nf as usize }
+    let globals = c
+        .globals
+        .iter()
+        .filter_map(|(s, d)| match (s, d) {
+            (GlobalId::Var(a), GlobalId::Var(b)) => Some((*a, *b)),
+            _ => None,
+        })
+        .collect();
+    Canonical { module: out, function: nf as usize, globals }
 }
 
 /// The function an entry-point record (`!{ptr @f, ...}`) names.
