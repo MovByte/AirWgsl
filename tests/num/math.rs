@@ -410,6 +410,8 @@ struct Tally {
     failures: u64,
     first: Vec<String>,
     count: u64,
+    /// Results other than the binary64 reference rounded to the result format.
+    not_nearest: u64,
 }
 
 impl Tally {
@@ -420,6 +422,7 @@ impl Tally {
         }
         self.failures += o.failures;
         self.count += o.count;
+        self.not_nearest += o.not_nearest;
         for s in o.first {
             if self.first.len() < 12 {
                 self.first.push(s);
@@ -438,15 +441,22 @@ impl Tally {
 /// Check one result: special values exactly, the rest within `bound` ulps (`half` selects the binary16 grid).
 fn assess(fun: &Fun, ops: &[u32], y: u32, half: bool, bound: f64, t: &mut Tally) {
     t.count += 1;
-    let wide: Vec<u32> = if half { ops.iter().map(|&h| r::f16_to_f32(h as u16)).collect() } else { ops.to_vec() };
-    if let Some(want) = (fun.special)(&wide) {
+    // Operands widened to binary32 bits and to binary64 values, on the stack (this runs for every input).
+    let mut wide = [0u32; 2];
+    let mut vals = [0f64; 2];
+    for (k, &o) in ops.iter().enumerate() {
+        wide[k] = if half { r::f16_to_f32(o as u16) } else { o };
+        vals[k] = f(wide[k]);
+    }
+    let wide = &wide[..ops.len()];
+    if let Some(want) = (fun.special)(wide) {
         let want = if half { r::f32_to_f16(want) as u32 } else { want };
         if y != want {
             t.fail(format!("{}({:08x?}) = {:08x}, want {:08x}", fun.name, ops, y, want));
         }
         return;
     }
-    let refv = (fun.reference)(&wide.iter().map(|&a| f(a)).collect::<Vec<_>>());
+    let refv = (fun.reference)(&vals[..ops.len()]);
     let nan = if half { y & 0x7fff > 0x7c00 } else { is_nan(y) };
     if refv.is_nan() || nan {
         if !(refv.is_nan() && nan) {
@@ -461,8 +471,8 @@ fn assess(fun: &Fun, ops: &[u32], y: u32, half: bool, bound: f64, t: &mut Tally)
     let e = (yv - refv).abs() / u;
     // Equal bits are the correctly rounded result even where the distance is not finite (an overflow to infinity).
     let err = if y == rounded { e.min(0.5) } else { e };
-    if std::env::var("NM_DEBUG").is_ok() && err > 0.4 {
-        eprintln!("debug {}({:08x?}) = {:08x} rounded {:08x} ref {:e} u {:e} err {}", fun.name, ops, y, rounded, refv, u, err);
+    if y != rounded {
+        t.not_nearest += 1;
     }
     if err > t.max {
         t.max = err;
@@ -476,12 +486,13 @@ fn assess(fun: &Fun, ops: &[u32], y: u32, half: bool, bound: f64, t: &mut Tally)
 fn report(what: &str, t: Tally, bound: f64) {
     assert_eq!(t.failures, 0, "{}: {} of {} fail\n{}", what, t.failures, t.count, t.first.join("\n"));
     eprintln!(
-        "{}: {} inputs, max error {:.6} ulp at {:08x?} (bound {}) ({})",
+        "{}: {} inputs, max error {:.6} ulp at {:08x?} (bound {}), {} results not the reference's nearest value ({})",
         what,
         t.count,
         t.max,
         t.at,
         bound,
+        t.not_nearest,
         Gpu::get().adapter
     );
 }
