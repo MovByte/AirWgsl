@@ -116,9 +116,22 @@ fn linking_brings_definitions_and_their_dependencies() {
     )
     .unwrap();
     assert_eq!(out.ret, Some(Val::S(Scalar::int(210))));
-    // Without the library the call is refused: nothing defines @helper.
-    let r = passes::canonicalize(&[main], "test", &[]).unwrap_err();
-    assert!(r.construct.contains("@helper"));
+    // Without the library nothing defines @helper: the call of its declaration stays, for the lowering to refuse.
+    let c = passes::canonicalize(&[main], "test", &[]).unwrap();
+    let f = &c.module.functions[c.function];
+    let callees: Vec<&str> = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter_map(|&i| match &f.inst(i).op {
+            Op::Call { callee: airwgsl::ir::Value::Global(airwgsl::ir::GlobalId::Function(g)), .. } => {
+                Some(c.module.functions[*g as usize].common.name.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(callees, vec!["helper"]);
+    assert!(c.module.functions.iter().find(|g| g.common.name == "helper").unwrap().is_declaration());
 }
 
 #[test]

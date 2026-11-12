@@ -120,9 +120,9 @@ fn inline_call(
             m,
             f,
             call,
-            Item::ModuleUnreadable,
+            Item::NonCanonical,
             "call",
-            "the call's function type differs from the callee's",
+            "the call's function type differs from the callee's, which LangRef leaves target-specific",
         ));
     }
     let ret_ty = m.functions[f].inst(call).ty;

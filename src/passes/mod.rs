@@ -35,11 +35,12 @@
 //!   (a function an entry-point record refers to, such as a stitching trait function, is kept as an external
 //!   declaration without its body), or one the code refers to without calling it. Code that refers to a defined
 //!   function as a value (a function pointer) is refused.
-//! - The function calls only declarations of `air.*` and `llvm.*` functions (*checked*: a direct call of anything
-//!   else is refused, naming it), and functions through pointers (visible function tables) stay calls through
-//!   pointers. No `air.is_function_constant_defined` or `air.normalize_function_constant_predicate`
-//!   call remains, nor any `llvm.lifetime.*`, `llvm.assume`, `llvm.experimental.noalias.scope.decl` or `llvm.dbg.*`
-//!   call (*checked*).
+//! - The function calls only declarations (*checked*): `air.*` and `llvm.*` intrinsics, and the functions no linked
+//!   module defines, which the lowering classifies (Metal runtime-library helpers `___metal_*` that Metal links at
+//!   pipeline creation, visible functions the pipeline did not link, post-tessellation control-point fetches) and
+//!   refuses or lowers. Functions through pointers (visible function tables) stay calls through pointers. No
+//!   `air.is_function_constant_defined` or `air.normalize_function_constant_predicate` call remains, nor any
+//!   `llvm.lifetime.*`, `llvm.assume`, `llvm.experimental.noalias.scope.decl` or `llvm.dbg.*` call (*checked*).
 //! - Function constants are values: an `air.fc_initializer` global holds the constant's value as its initializer (or
 //!   `undef` when it has none) and is `constant`; a load of one through a constant pointer is folded (*checked*).
 //!   Constant-address-space globals are `constant` with the contents the static initializers left in them, when no
@@ -291,16 +292,6 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
             match &func.inst(id).op {
                 crate::ir::Op::Call { callee: Value::Global(GlobalId::Function(c)), .. } => {
                     let callee = &m.functions[*c as usize].common.name;
-                    if !callee.starts_with("air.") && !callee.starts_with("llvm.") {
-                        return Err(refusal_at(
-                            m,
-                            f,
-                            id,
-                            Item::ForeignCallee,
-                            &format!("call of @{}", callee),
-                            "no linked module defines the function, and it is not an intrinsic",
-                        ));
-                    }
                     let gone = ["air.is_function_constant_defined", "air.normalize_function_constant_predicate"];
                     let gone_llvm =
                         ["llvm.lifetime.", "llvm.assume", "llvm.experimental.noalias.scope.decl", "llvm.dbg."];
@@ -338,8 +329,6 @@ fn check(m: &Module, f: usize) -> Result<(), Refusal> {
 pub enum Item {
     /// A call cycle: MSL has no recursion and WGSL cannot express it.
     CallCycle,
-    /// A call of a declaration that is neither an intrinsic nor defined by a linked module.
-    ForeignCallee,
     /// A static initializer canonicalization cannot run at compile time.
     StaticInit,
     /// A function constant record or query canonicalization cannot resolve.
@@ -360,7 +349,6 @@ impl Item {
     pub fn tag(self) -> &'static str {
         match self {
             Item::CallCycle => "compiler:call-cycle",
-            Item::ForeignCallee => "compiler:foreign-callee",
             Item::StaticInit => "family:static-init",
             Item::FunctionConstants => "family:function-constants",
             Item::FunctionConstantType => "compiler:function-constant-type",
