@@ -35,23 +35,27 @@ struct VS { float4 pos [[position]]; short x [[user(x)]]; };
 struct FU { float4 pos [[position]]; uint x [[user(x)]]; };
 struct FH { float4 pos [[position]]; half x [[user(x)]]; };
 struct FN { float4 pos [[position]]; float y [[user(y)]]; };
+struct FV { float4 pos [[position]]; float4 x [[user(x)]]; half z [[user(z)]]; };
 vertex VI v_int(uint vid [[vertex_id]]) { VI o; o.pos = float4(0, 0, 0, 1); o.x = -int(vid); return o; }
 vertex VF v_float(uint vid [[vertex_id]]) { VF o; o.pos = float4(0, 0, 0, 1); o.x = float(vid); return o; }
 vertex VS v_short(uint vid [[vertex_id]]) { VS o; o.pos = float4(0, 0, 0, 1); o.x = short(vid); return o; }
 fragment uint4 f_uint(FU in [[stage_in]]) { return uint4(in.x); }
 fragment uint4 f_half(FH in [[stage_in]]) { return uint4(as_type<ushort>(in.x)); }
 fragment uint4 f_other(FN in [[stage_in]]) { return uint4(as_type<uint>(in.y)); }
+fragment uint4 f_unread(FV in [[stage_in]]) { return uint4(1); }
 "#;
 
 /// Real Metal links an int output to a uint input of the same name and refuses other type differences and inputs no
 /// output writes (measured: "Fragment input(s) ... mismatching vertex shader output type(s) or not written by vertex
-/// shader").
+/// shader"); an input the fragment function does not read links whatever its type and whether or not an output
+/// writes it.
 #[test]
 fn varyings_link_as_metal_links_them() {
     let dir = case_dir("varyings");
     let bc = air(&dir, VARYINGS, "metal3.1");
     let desc = render_desc(123, 3, 1, None);
     pipeline(&bc, "v_int", "f_uint", &desc, &host()).unwrap();
+    pipeline(&bc, "v_int", "f_unread", &desc, &host()).unwrap();
     for (vs, fs) in [("v_float", "f_half"), ("v_short", "f_uint"), ("v_int", "f_other")] {
         let e = pipeline(&bc, vs, fs, &desc, &host()).unwrap_err();
         assert_eq!(

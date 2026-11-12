@@ -15,7 +15,7 @@ use crate::api::{
     ComputeState, HostCaps, Location, MetalStage, PipelineDesc, PipelineKind, Refusal, RefusalKind, StageBindings,
     UniformValue,
 };
-use crate::ir::{Module, Type, TypeId};
+use crate::ir::{Module, Type, TypeId, Value};
 use crate::layout::Layout;
 use crate::mem::{ArgRegion, RegionKind};
 use std::collections::{BTreeMap, HashMap};
@@ -286,6 +286,11 @@ fn ret_members(m: &Module, fi: usize) -> (Vec<TypeId>, bool) {
     }
 }
 
+/// Whether an instruction of function `fi` uses argument `a`.
+fn arg_used(m: &Module, fi: usize, a: u32) -> bool {
+    m.functions[fi].insts.iter().any(|i| i.op.operands().into_iter().any(|v| v == Value::Arg(a)))
+}
+
 /// Assign varying locations for a pipeline: the fragment inputs, sorted by name, then the vertex outputs no fragment
 /// input reads (which a vertex-only lowering still declares).
 pub fn varyings(v: Option<(&Module, &EntryPoint)>, f: Option<(&Module, &EntryPoint)>) -> Result<Varyings, Refusal> {
@@ -296,6 +301,11 @@ pub fn varyings(v: Option<(&Module, &EntryPoint)>, f: Option<(&Module, &EntryPoi
         let mut names: Vec<(String, TypeId, Option<Interpolation>)> = Vec::new();
         for a in &e.arguments {
             if let Role::FragmentInput { name, interpolation, interpolant } = &a.role {
+                // An input the function does not read links to nothing: real Metal creates the pipeline whatever
+                // its type, and whether or not a vertex output of its name exists (measured).
+                if a.unused || !arg_used(m, fi, a.position) {
+                    continue;
+                }
                 if interpolant.is_some() {
                     return Err(pull_model(m, fi));
                 }
@@ -676,6 +686,9 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
                 bind(&mut it, e);
             }
             Role::FragmentInput { name: n, interpolant, .. } if stage == MetalStage::Fragment => {
+                if unused {
+                    continue;
+                }
                 if interpolant.is_some() {
                     return Err(pull_model(m, fi));
                 }
