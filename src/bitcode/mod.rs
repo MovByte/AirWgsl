@@ -80,7 +80,9 @@ pub const BITCODE_MAGIC: [u8; 4] = [b'B', b'C', 0xc0, 0xde];
 /// Splits a wrapper header off `data` when it has one; returns the header and the bitcode it delimits.
 ///
 /// The header is five little-endian `u32`s (magic, version, offset, size, cputype; `BitcodeWrapperHeader` in
-/// `BitCodeEnums.h`). The bitcode is `data[offset .. offset + size]`; bytes outside it belong to the container.
+/// `BitCodeEnums.h`). The bitcode is `data[offset .. offset + size]`; bytes outside it belong to the container, and
+/// LLVM ignores them as this reader does. (Measured in metallib module slots: up to 16 bytes after the bitcode, zeros,
+/// sometimes ending in four newline bytes.)
 pub fn split_wrapper(data: &[u8]) -> Result<(Option<WrapperHeader>, &[u8])> {
     if data.len() >= 4 && data[..4] == WRAPPER_MAGIC {
         if data.len() < 20 {
