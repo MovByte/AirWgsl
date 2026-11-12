@@ -11,8 +11,11 @@
 //!
 //! # Formats and attribute types
 //!
-//! Measured on real Metal (Apple M4, macOS 27.0.1), the pipeline is created exactly for these combinations and refused
-//! with "Vertex attribute ... cannot be read using MTLAttributeFormat..." otherwise:
+//! The pipeline is created exactly for these combinations and refused with "Vertex attribute ... cannot be read using
+//! MTLAttributeFormat..." otherwise. Measured on real Metal (Apple M4, macOS 27.0.1), and the rule is the framework's
+//! own on the target build: 21H461's `-[MTLVertexDescriptorInternal validateWithVertexFunction:error:
+//! renderPipelineDescriptor:]` (0x187bb874c) checks each active attribute's data type against
+//! `isVertexFormatInteger(format)` this way, with that message, before any compiler runs:
 //!
 //! | Format | Attribute scalar |
 //! | --- | --- |
@@ -55,6 +58,16 @@
 //! dynamic attribute stride (D1 `supportsDynamicAttributeStride = false`), and the packed float formats
 //! `FloatRG11B10` and `FloatRGB9E5` are listed from Apple5 in Apple's feature set tables (the V1 case requires
 //! Apple5; the A10X is Apple3). Each of these is refused as on the device.
+//!
+//! Alignment is not validated on the target: 21H461's Metal.framework checks no stride or offset alignment (the
+//! descriptor validation above and `newSerializedDescriptor`), and its only use of `supportsUnalignedVertexFetch`, which
+//! the A10X answers NO, is `MTLGetCompilerOptions` (0x187a9acdc) choosing a compiler option bit, so the pipeline is
+//! created. The API validation layer (MetalTools) alone checks, at draw and stage-in dispatch time, that a stride is a
+//! multiple of 4 on such a device (`-[MTLDebugRenderCommandEncoder validateCommonDrawErrors:instanceCount:baseInstance:
+//! maxVertexID:]`, "providing stride of %u to buffer-layout index %u, but device only supports strides that are a
+//! multiple of 4 bytes."), which the guest's own validation layer reports against the plugin device. Pipelines with
+//! unaligned strides or offsets are therefore compiled; the generated code reads the addressed bytes, as a device
+//! with unaligned fetch does (measured), where the A10X's result is undefined.
 
 use super::lib;
 use crate::air::{Argument, Location, Role, Slot};

@@ -103,7 +103,7 @@ fn aw_vf_snorm_f32(c: u32, n: u32) -> u32 {
 
 // Int1010102Normalized's 10-bit components to binary32. Real Metal (measured for every code) rounds f32(c) times the
 // binary32 nearest to 1/511 (0x3b004020) and clamps the product at -1; the result differs from the correctly rounded
-// c / 511 for 7% of the codes. nm_f32_mul (the numerics library) is the correctly rounded binary32 product.
+// c / 511 for 96 of the 1024 codes. nm_f32_mul (the numerics library) is the correctly rounded binary32 product.
 fn aw_vf_snorm10_f32(c: u32) -> u32 {
     let v = bitcast<i32>(c << 22u) >> 22u;
     let r = nm_f32_mul(bitcast<u32>(f32(v)), 0x3b004020u);
