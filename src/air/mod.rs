@@ -249,11 +249,13 @@ pub enum IntersectionTag {
     Levels(u32),
 }
 
-/// A binding index or count: a number, or a function constant that gives it.
+/// A binding index or count: a number, or a global that gives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     Value(u32),
-    /// The function constant global, by index into [`Module::globals`].
+    /// A global, by index into [`Module::globals`], that holds the value once function constants are set: a
+    /// function constant's own global, or one the module's static initializer computes from constants (the system
+    /// corpus has render-target indices in `__metal_implicit_attr_int_expr` globals).
     Constant(u32),
 }
 
