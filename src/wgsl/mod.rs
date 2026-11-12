@@ -527,8 +527,26 @@ pub fn compile_with(
     if groups > 0 {
         requirements.limits.insert("maxBindGroups".into(), groups);
     }
-    if !varyings.is_empty() {
-        requirements.limits.insert("maxInterStageShaderVariables".into(), varyings.len() as u64);
+    // WebGPU 10.3.1 validating inter-stage interfaces: the fragment stage's front_facing, sample_index and sample_mask
+    // inputs count as inter-stage variables, and a point-list pipeline has one variable fewer for vertex outputs.
+    let fragment_builtins = stages
+        .iter()
+        .filter(|s| s.stage == MetalStage::Fragment)
+        .filter_map(|s| s.source.lines().find(|l| l.starts_with(&format!("fn {}(", ENTRY_POINT))))
+        .map(|l| {
+            ["@builtin(front_facing)", "@builtin(sample_index)", "@builtin(sample_mask)"]
+                .iter()
+                .filter(|b| l.contains(*b))
+                .count() as u64
+        })
+        .sum::<u64>();
+    let points = match &desc.kind {
+        PipelineKind::Render(r) => r.input_primitive_topology == 1 || r.primitive_type == Some(0),
+        _ => false,
+    };
+    let inter_stage = (varyings.len() as u64 + fragment_builtins).max(varyings.len() as u64 + points as u64);
+    if inter_stage > 0 {
+        requirements.limits.insert("maxInterStageShaderVariables".into(), inter_stage);
     }
     if layout.uniform_size() > 0 {
         requirements.limits.insert("maxUniformBufferBindingSize".into(), layout.uniform_size());
