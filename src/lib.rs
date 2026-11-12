@@ -12,6 +12,7 @@ pub mod bitstream;
 pub mod cfg;
 pub mod ftable;
 pub mod icb;
+pub mod interp;
 pub mod ir;
 pub mod layout;
 pub mod mem;
