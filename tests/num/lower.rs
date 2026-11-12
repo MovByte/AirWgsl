@@ -68,7 +68,9 @@ fn run_lowered(op: Op, tys: &[Ty], ret: Ty, flags: FastMath, rounding: &Rounding
     let enable = l.enables.contains("f16");
     let src = crate::gpu::kernel_source(enable, &l.prelude.emit().unwrap(), "", &body);
     let k = Kernel::new(&src, words(ret));
-    let stride = base;
+    // Items may carry more words than the operands use; the stride is the item length.
+    let stride = inputs.first().map_or(base, |i| i.len() as u32);
+    assert!(stride >= base);
     let mut results = Vec::new();
     let per_run = (MAX_WORDS / stride.max(words(ret)).max(1) as u64) as usize;
     for chunk in inputs.chunks(per_run) {
@@ -616,6 +618,124 @@ fn comparisons_are_ieee() {
             let (_, got) = run_lowered(Op::Inst(Inst::FCmp(p)), &[ty, ty], Ty::vector(Scalar::I1, 2), FastMath::NONE, &soft, &items);
             let val = |w: u32| if s == Scalar::F16 { r::f(r::f16_to_f32(w as u16)) } else { r::f(w) };
             check(&format!("fcmp {:?} {:?}", p, s), &items, &got, |w| vec![f(val(w[0]), val(w[2])) as u32, f(val(w[1]), val(w[3])) as u32]);
+        }
+    }
+}
+
+// Policies on this device ------------------------------------------------------------------------------------------
+
+fn subnormal32(x: u32) -> bool {
+    x & 0x7f80_0000 == 0 && x & 0x007f_ffff != 0
+}
+
+/// Fast-math +, *, fma and a polyfilled function, lowered under the default policy (bit-exact everywhere) and under
+/// the native policy this device's self-test supports (round to nearest even; subnormal results may be flushed, as
+/// MSL 8.1 allows).
+#[test]
+fn policies_compute_correctly_on_this_device() {
+    let mut rng = Rng::new(35);
+    let ty = Ty::vector(Scalar::F32, 4);
+    let items: Vec<Vec<u32>> = (0..1 << 16)
+        .map(|_| (0..12).map(|_| loop {
+            let v = f32_any(&mut rng);
+            // Fast math: NaN and infinity operands are undefined (MSL 8.1).
+            if r::f(v).is_finite() {
+                break v;
+            }
+        }).collect())
+        .collect();
+    let cases = selftest::cases();
+    let want: Vec<u32> = cases.iter().map(|c| c.want).collect();
+    let native = Rounding::Native(selftest::evaluate(&cases, &want).native_rounding().unwrap());
+    for (label, rounding) in [("soft-float", Rounding::SoftFloat), ("native", native)] {
+        for (op, arity, f) in [
+            (Op::Inst(Inst::FAdd), 2, (|a: &[u32]| r::add(a[0], a[1])) as fn(&[u32]) -> u32),
+            (Op::Inst(Inst::FMul), 2, |a| r::mul(a[0], a[1])),
+            (Op::Call("air.fma.v4f32"), 3, |a| r::fma(a[0], a[1], a[2])),
+        ] {
+            let tys = vec![ty; arity];
+            let (l, got) = run_lowered(op, &tys, ty, FastMath::FAST, &rounding, &items);
+            let mut flushed = 0;
+            for (inp, g) in items.iter().zip(&got) {
+                for lane in 0..4 {
+                    let a: Vec<u32> = (0..arity).map(|k| inp[k * 4 + lane]).collect();
+                    let w = f(&a);
+                    if r::f(w).is_nan() || !r::f(w).is_finite() {
+                        continue;
+                    }
+                    if g[lane] != w {
+                        // Only the native policy may flush (MSL 8.5): a subnormal result to a zero of either sign, or
+                        // subnormal operands to zeros of either sign before an otherwise conforming operation.
+                        // "Subnormal before rounding": whether the exact value is below the smallest normal. binary64
+                        // holds binary32 products exactly; a sum is the exact pair (s, e) of TwoSum.
+                        let m = 2f64.powi(-126);
+                        let tiny = |b: &[u32]| -> bool {
+                            let x: Vec<f64> = b.iter().map(|&v| r::f(v) as f64).collect();
+                            let (p, c) = match arity {
+                                3 => (x[0] * x[1], x[2]),
+                                _ if matches!(op, Op::Inst(Inst::FMul)) => (x[0] * x[1], 0.0),
+                                _ => (x[0], x[1]),
+                            };
+                            let s = p + c;
+                            let bb = s - p;
+                            let e = (p - (s - bb)) + (c - bb);
+                            if s == 0.0 && e == 0.0 {
+                                return false;
+                            }
+                            s.abs() < m || (s.abs() == m && e != 0.0 && (e < 0.0) != (s < 0.0))
+                        };
+                        let flush = |b: &[u32], v: u32| if tiny(b) { vec![v, 0, 0x8000_0000] } else { vec![v] };
+                        let mut allowed = flush(&a, w);
+                        let subs: Vec<usize> = (0..arity).filter(|&k| subnormal32(a[k])).collect();
+                        for mask in 0..(1u32 << (2 * subs.len())) {
+                            let mut b = a.clone();
+                            for (j, &k) in subs.iter().enumerate() {
+                                b[k] = (mask >> (2 * j) & 1) << 31;
+                            }
+                            allowed.extend(flush(&b, f(&b)));
+                        }
+                        assert!(label == "native" && allowed.contains(&g[lane]), "{} {:?}: {:08x?} got {:08x} want {:08x}", label, op, a, g[lane], w);
+                        flushed += 1;
+                    }
+                }
+            }
+            eprintln!("{} {:?} ({:?}): {} lanes, {} differ only by flushing subnormals", label, op, l.rule.how, items.len() * 4, flushed);
+        }
+    }
+}
+
+/// binary16 arithmetic lowered with fast flags: native f16 on a shader-f16 device (the half row's decision; any
+/// correctly rounded result conforms and this device's f16 is checked to give it), and the exact binary16 library
+/// for precise calls.
+#[test]
+fn half_lowering_on_this_device() {
+    assert!(Gpu::get().has_f16, "the device offers shader-f16");
+    let mut rng = Rng::new(36);
+    let ty = Ty::vector(Scalar::F16, 2);
+    let items: Vec<Vec<u32>> = (0..1 << 16).map(|_| (0..4).map(|_| rng.below(1 << 16)).collect()).collect();
+    for flags in [FastMath::FAST, FastMath::NONE] {
+        for (op, f) in [
+            (Inst::FAdd, (|a: u16, b: u16| r::h_add(a, b)) as fn(u16, u16) -> u16),
+            (Inst::FSub, |a, b| r::h_sub(a, b)),
+            (Inst::FMul, |a, b| r::h_mul(a, b)),
+            (Inst::FDiv, |a, b| r::h_div(a, b)),
+        ] {
+            let soft = Rounding::SoftFloat;
+            let (l, got) = run_lowered(Op::Inst(op), &[ty, ty], ty, flags, &soft, &items);
+            for (inp, g) in items.iter().zip(&got) {
+                for lane in 0..2 {
+                    let (a, b) = (inp[lane] as u16, inp[2 + lane] as u16);
+                    let w = f(a, b) as u32;
+                    let nan = |h: u32| h & 0x7fff > 0x7c00;
+                    let special = |h: u16| h & 0x7c00 == 0x7c00;
+                    if flags.finite_only() && (special(a) || special(b) || special(w as u16) || (w & 0x7c00 == 0 && w & 0x3ff != 0)) {
+                        // Fast math: NaN and infinity undefined, subnormals may be flushed.
+                        continue;
+                    }
+                    assert!(g[lane] == w || nan(g[lane]) && nan(w), "{:?} {:?}: {:04x} {:04x} got {:04x} want {:04x}", flags, op, a, b, g[lane], w);
+                }
+            }
+            eprintln!("binary16 {:?} with {}: {:?}, {} lanes", op, if flags.finite_only() { "fast flags" } else { "no flags" }, l.rule.how, items.len() * 2);
         }
     }
 }

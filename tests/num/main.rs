@@ -12,6 +12,7 @@ mod lower;
 mod math;
 mod metal_special;
 mod reference;
+mod selftest;
 mod softfloat;
 
 use airwgsl::num::prelude::Prelude;
