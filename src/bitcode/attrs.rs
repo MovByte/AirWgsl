@@ -293,6 +293,9 @@ impl<'a> Reader<'a> {
                 return self.malformed("invalid attribute group index");
             }
             let index = if idx == FUNCTION_INDEX { u32::MAX } else { idx as u32 };
+            if index != u32::MAX && index > MAX_PARAMS {
+                return self.unsupported(format!("attributes of parameter {} (this reader keeps at most {} parameters)", index - 1, MAX_PARAMS));
+            }
             if self.attr_groups.insert(grp, (index, set)).is_some() {
                 return self.malformed(format!("attribute group {} defined twice", grp));
             }
@@ -397,6 +400,10 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 }
+
+/// How many parameters an attribute list may describe: a limit of this reader, which keeps parameter attributes in a
+/// dense list (LLVM's limit is the index type's range).
+pub(crate) const MAX_PARAMS: u32 = 1 << 16;
 
 /// `UpgradeAttributes`: old string attributes LLVM replaces while reading a group.
 fn upgrade_attributes(set: &mut AttrSet) {

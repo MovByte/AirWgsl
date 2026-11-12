@@ -328,23 +328,26 @@ impl<'a> Reader<'a> {
                 _ => None,
             }
         };
-        // Uniqued tuples and argument lists: depth-first, operands before users.
+        // Uniqued tuples and argument lists: depth-first, operands before users. Each stack entry keeps the operand
+        // to look at next, so every operand is visited once.
+        let mut on_stack = vec![false; n];
         for root in 0..n {
             if self.md.list[first + root] != UNSET {
                 continue;
             }
-            let mut stack = vec![root];
-            let mut on_stack = vec![false; n];
+            let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
             on_stack[root] = true;
-            while let Some(&i) = stack.last() {
-                let ops: Vec<u64> = match &raw[i] {
-                    RawMd::Tuple { ops, .. } | RawMd::ArgList(ops) => ops.clone(),
+            while let Some(&(i, next)) = stack.last() {
+                let (ops, is_arglist) = match &raw[i] {
+                    RawMd::Tuple { ops, .. } => (ops, false),
+                    RawMd::ArgList(ops) => (ops, true),
                     RawMd::Ready(_) => unreachable!(),
                 };
-                let is_arglist = matches!(raw[i], RawMd::ArgList(_));
+                let mut k = next;
                 let mut pending = None;
-                for &op in &ops {
-                    let target = if is_arglist { op + 1 } else { op };
+                while k < ops.len() {
+                    let target = if is_arglist { ops[k] + 1 } else { ops[k] };
+                    k += 1;
                     if target == 0 {
                         continue;
                     }
@@ -363,14 +366,15 @@ impl<'a> Reader<'a> {
                         break;
                     }
                 }
+                stack.last_mut().unwrap().1 = k;
                 if let Some(p) = pending {
                     on_stack[p] = true;
-                    stack.push(p);
+                    stack.push((p, 0));
                     continue;
                 }
                 let id = if is_arglist {
                     let mut items = Vec::new();
-                    for &op in &ops {
+                    for &op in ops {
                         let m = resolve_op(&self.md.list, op + 1).flatten().unwrap();
                         if !matches!(self.m.md(m), Metadata::Value { .. } | Metadata::Local { .. }) {
                             return self.malformed("DIArgList operand is not a value");

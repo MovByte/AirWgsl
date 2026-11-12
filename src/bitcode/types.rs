@@ -294,24 +294,25 @@ impl<'a> Reader<'a> {
             if state[root] != 0 {
                 continue;
             }
-            let mut stack: Vec<(usize, usize)> = vec![(root, 0)];
+            let children = |t: usize| type_children(self.m.types.get(TypeId(t as u32)));
+            let mut stack: Vec<(usize, Vec<TypeId>, usize)> = vec![(root, children(root), 0)];
             state[root] = 1;
-            while let Some(&mut (t, ref mut next)) = stack.last_mut() {
-                let children = type_children(self.m.types.get(TypeId(t as u32)));
-                if *next < children.len() {
-                    let c = children[*next].0 as usize;
+            while let Some((t, kids, next)) = stack.last_mut() {
+                let t = *t;
+                if *next < kids.len() {
+                    let c = kids[*next].0 as usize;
                     *next += 1;
                     match state[c] {
                         0 => {
                             state[c] = 1;
-                            stack.push((c, 0));
+                            stack.push((c, children(c), 0));
                         }
                         1 => return self.malformed("recursive struct type"),
                         _ => {}
                     }
                     continue;
                 }
-                let d = 1 + children.iter().map(|c| depth[c.0 as usize]).max().unwrap_or(0);
+                let d = 1 + kids.iter().map(|c| depth[c.0 as usize]).max().unwrap_or(0);
                 if d > MAX_TYPE_DEPTH {
                     return self.unsupported(format!("types nested more than {} deep", MAX_TYPE_DEPTH));
                 }
