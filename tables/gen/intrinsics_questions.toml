@@ -1,0 +1,146 @@
+# Shader-language questions from sections 2.8 and 5 of the translator plan. Citations are
+# verified by tables/check.py; measurement citations name tables/measure/air_probe.toml.
+
+[[question]]
+id = "5.1-name-sources"
+plan = "5.1"
+question = "Where do the accepted air.* names come from, and do the two sources agree?"
+status = "resolved"
+answer = "MTLCompiler.framework links libGPUCompiler.dylib, whose implementation libraries hold the front end's AIR name tables; the five images, extracted from the 21H461 cache, contribute 10,427 identifiers (gen/frontend_names.py). The 167 system metallibs (19,556 modules) declare 1,101 air.* functions and use 166 air.* metadata names (gen/survey_corpus.py). They do not coincide: 710 corpus functions are absent from the strings because the front end composes type-suffixed names from stems at run time (air.acos + .f32); the probe measurement shows that composition. The table therefore classifies the union by family patterns over stems and type suffixes, and every corpus metadata name is also in the strings."
+cite = [
+  { measure = "air-probe", case = "math_acos_h", quote = "air.acos.f16" },
+]
+
+[[question]]
+id = "5.1-triples"
+plan = "5.1"
+question = "Which target triples and language versions occur in the system metallibs?"
+status = "resolved"
+answer = "air64-apple-ios17.7.0 16,783; ios17.4.0 2,758; ios17.0.0 13; ios15.0.0 1; and one module with triple air64_v26-apple-ios17.0.0, which the plan's survey did not list. Language versions 1.1 to 3.1, and 643 modules without an air.language_version record. Every module disassembles with llvm-dis 21. The [survey] table of this file holds the counts."
+cite = [
+  { measure = "air-probe", case = "module-metadata", quote = "air.language_version" },
+]
+
+[[question]]
+id = "2.8-address-spaces"
+plan = "2.8"
+question = "What do AIR address spaces 3 and 4 denote?"
+status = "resolved"
+answer = "Measured on the front end: thread 0, device 1, constant 2, threadgroup 3, threadgroup_imageblock 4. Address space 4 therefore belongs to imageblock code, which the A10X's family does not run (family imageblock-tile)."
+cite = [
+  { measure = "air-probe", case = "as_threadgroup", quote = "pointer_address_spaces: 3" },
+  { measure = "air-probe", case = "as_threadgroup_imageblock", quote = "pointer_address_spaces: 4" },
+  { measure = "air-probe", case = "as_device", quote = "pointer_address_spaces: 1" },
+]
+
+[[question]]
+id = "5.2-double-in-corpus"
+plan = "5.2"
+question = "Does any system metallib compute in double?"
+status = "resolved"
+answer = "Yes, although MSL does not support double: two modules declare air.floor.f64 and air.fmin.f64 (survey counts in the [[name]] rows). They are refused (family double); if an A10X-selected path reaches them the refusal is LOUD with the module named, and the producing library needs identifying."
+cite = [
+  { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
+]
+
+[[question]]
+id = "5.5-binding-arrays"
+plan = "5.5"
+question = "Does WebGPU or WGSL have binding arrays?"
+status = "resolved"
+answer = "No: the pinned WGSL has no binding_array type, so arrays of textures and samplers expand to one binding per element (plan 5.5)."
+cite = [
+  { src = "wgsl", ref = "#builtin-functions", absent = '\bbinding_array\b' },
+  { src = "wgsl", ref = "#resource-interface", absent = '\bbinding_array\b' },
+]
+
+[[question]]
+id = "5.6-discard"
+plan = "5.6"
+question = "The language-version rule for discard_fragment."
+status = "resolved"
+answer = "In MSL 2.2 and earlier, discard_fragment terminates the thread and makes derivatives in the quad undefined if some but not all threads discard; in MSL 2.3 and later it marks the fragment terminated while execution continues in parallel, derivatives stay defined, and output and later buffer or texture writes are discarded. WGSL discard demotes to a helper invocation and only statements before it have observable effects, which is the 2.3 rule; for modules of language version 2.2 and earlier the same lowering is a valid refinement because their derivative results after a partial discard are undefined."
+cite = [
+  { src = "msl", ref = "6.11.1.3", quote = "In Metal 2.2 and earlier, if any (but not all) of these threads executes the discard_fragment function, the thread is terminated and the behavior of any derivative computations (explicit or implicit) is undefined." },
+  { src = "msl", ref = "6.11.1.3", quote = "In Metal 2.3 and later, discard_fragment marks the fragment as terminated while continuing to execute in parallel and has no effect on whether derivatives are defined." },
+  { src = "wgsl", ref = "#discard-statement", quote = "Only statements executed prior to the discard statement will have observable effects." },
+]
+
+[[question]]
+id = "5.7-sample-outside-fragment"
+plan = "5.7"
+question = "What LOD does MSL use for sample() without an explicit level outside fragment functions?"
+status = "resolved"
+answer = "LOD 0 (also for gather). WGSL allows implicit-LOD textureSample only in fragment shaders, so outside them the lowering is textureSampleLevel with level 0, which is exact."
+cite = [
+  { src = "msl", ref = "6.13", quote = "In a fragment function, the texture sample and sample_compare functions that don’t take an explicit LOD or gradients calculate an implicit LOD by taking the derivative of the texture coordinate passed to the function." },
+  { src = "msl", ref = "6.13", quote = "The gather and gather_compare functions you don’t call in a fragment function also have a default LOD of 0." },
+]
+
+[[question]]
+id = "5.7-null-texture"
+plan = "5.7"
+question = "What does Metal define for member functions of a null texture?"
+status = "resolved"
+answer = "Nothing: calling any texture member function on a null texture is undefined. Only is_null_texture is defined (true for a null texture), so the dummy-binding emulation needs only the null flag to be exact."
+cite = [
+  { src = "msl", ref = "6.13.18", quote = "The behavior of calling any texture member function with a null texture is undefined." },
+]
+
+[[question]]
+id = "5.8-atomic-bool"
+plan = "5.8"
+question = "Is atomic_bool a separate AIR operation without a WGSL form?"
+status = "resolved"
+answer = "No. Measured: the front end lowers atomic_bool operations to 32-bit atomics (air.atomic.global.store.i32), which WGSL atomic<u32> represents; plan 5.8's refusal for atomic_bool is not needed. Float and 64-bit atomics remain above the A10X's family (families atomic-float, atomic-int64)."
+cite = [
+  { measure = "air-probe", case = "atomic_bool_device", quote = "air.atomic.global.store.i32" },
+]
+
+[[question]]
+id = "5.9-fetch-per-sample"
+plan = "5.9"
+question = "Does a fragment function that reads [[color(m)]] of a multisampled attachment run per sample?"
+status = "resolved"
+answer = "MSL: [[color(m)]] identifies the sample color for a multisampled attachment, and a fragment function using it may execute per sample, with only the per-sample inputs differing. The emulation therefore runs the fetching function per sample and supplies each sample's value; WebGPU runs a fragment shader per sample when it uses sample_index or sample interpolation. The color input itself is metadata, not a call (measured)."
+cite = [
+  { src = "msl", ref = "5.5", quote = "the [[color(m)]] attribute identifies the destination fragment color or sample color (for a multisampled color attachment) value. If you use any of these attributes with arguments to a fragment function, the fragment function may execute per-sample instead of per-pixel." },
+  { measure = "air-probe", case = "frag_fetch", quote = "(none)" },
+]
+
+[[question]]
+id = "5.10-output-format-mismatch"
+plan = "5.10"
+question = "Metal's rule when a fragment output's type or component count differs from the attachment format."
+status = "open"
+owner = "V1"
+reason = "MSL lists the allowed output data types (float, half, int, uint, short, ushort vectors) but states no result for a type that does not match the attachment's format class or for missing components. What real Metal does is measured by V1 with and without the debug layer."
+cite = [
+  { src = "msl", ref = "5.2.3.5", quote = "floatn, halfn, intn, uintn, shortn, or ushortn Color value output for a color attachment." },
+]
+
+[[question]]
+id = "5.3-interpolate-at"
+plan = "5.3"
+question = "Does the A10X accept pull-model interpolation?"
+status = "open"
+owner = "D1"
+reason = "MSL states pull-model interpolation for Metal 2.3 and later with no GPU-family restriction in its text, and Apple's family tables have no row for it, so acceptance on the A10X is a device question (D1, or the device-side compiler in G4). The WGSL side is settled either way: there is no pull-model interpolation, so the family is refused (family pull-model-interpolation)."
+cite = [
+  { src = "msl", ref = "6.12", quote = "All OS: Metal 2.3 and later support pull-model interpolation." },
+]
+
+[[question]]
+id = "D1-shader-feature-cross-check"
+plan = "5.7"
+question = "Which shader features does the A10X support: SIMD-group functions, raster order groups and imageblocks, read-write textures, cube arrays, tessellation, indirect command buffers, function pointers, ray tracing, layered rendering, non-uniform threadgroups?"
+status = "open"
+owner = "D1"
+reason = "Device capabilities are D1's to extract from the 21H461 binaries. Apple's published family tables, a cross-check only, place the A10 series in Apple3 and list: tessellation and render/compute indirect command buffers at Apple3 (supported); quad permute, raster order groups, imageblocks, tile shaders, read-write textures, cube map arrays and non-uniform threadgroup size at Apple4; layered rendering and multiple viewports at Apple5; SIMD permute, texture atomics, function pointers, dynamic libraries and ray tracing at Apple6; SIMD reductions, primitive ID, barycentrics and float atomics at Apple7 (not supported). The families of this file use those rows; a D1 answer that differs reopens the family."
+cite = [
+  { src = "mfst", quote = "A10-series Metal Apple3" },
+  { src = "mfst", quote = "Tessellation Metal 3 Apple3" },
+  { src = "mfst", quote = "Cube map texture arrays Metal 3 & 4 Apple4" },
+  { src = "mfst", quote = "Nonuniform threadgroup size Metal 3 & 4 Apple4" },
+  { src = "mfst", quote = "Read/write textures in functions Metal 3 & 4 Apple4" },
+]

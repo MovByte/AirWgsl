@@ -1,0 +1,826 @@
+# Families of air.* names. Every name of intrinsics.toml matches exactly one family's
+# patterns (Python full match). decision is one of:
+#   numerics            float math; the lowering is the numerics.toml row named in rows
+#   native              a WGSL built-in or statement with the same definition
+#   lowering            an exact WGSL implementation (integer emulation, memory model,
+#                       executor-provided values) owned by the package named in owner
+#   emulation           an exact emulation that the plan section named in plan describes
+#   metadata            module or argument metadata decoded by S2; no WGSL code of its own
+#   device-unsupported  a feature Apple's family tables place above the A10X's Apple3
+#                       family; rejected as on device (the D1 profile is authoritative)
+#   not-from-msl        a front-end name for a construct the MSL specification does not
+#                       define and the system corpus does not use; Refusal if met
+#   refusal             no exact WebGPU form; LOUD with the blocking clause
+#   open                unresolved, with the reason
+# probe lists measurement cases (tables/measure/air_probe.toml) whose emitted names are
+# in the family, linking the MSL construct to the names.
+
+# ---------------------------------------------------------------- numeric types
+
+[[family]]
+id = "double"
+match = ['air\.(?:.*\.)?(?:v\d+)?f64(?:\..*)?', 'air\.double_type']
+kind = "function"
+msl = "double-precision forms"
+decision = "refusal"
+wgsl = "none"
+reason = "MSL does not support the double type and WGSL has no 64-bit float; plan section 5.2 treats a module computing in double as malformed input. These names are front-end entries, and two system modules use them (question 5.2-double-in-corpus)."
+cite = [
+  { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
+  { src = "wgsl", ref = "#floating-point-types", absent = '\bf64\b' },
+]
+
+[[family]]
+id = "bfloat"
+match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?!simdgroup_matrix)(?:.*\.)?(?:v\d+)?bf16(?:\..*)?', 'air\.bfloat_type']
+kind = "function"
+msl = "bfloat type and operations"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Apple's family tables list the bfloat data type from Apple6; the A10X is Apple3."
+cite = [
+  { src = "mfst", quote = "MTLDataType.bfloat (brain float) scalar and vector cases Metal 3 & 4 Apple6" },
+  { src = "mfst", quote = "A10-series Metal Apple3" },
+]
+
+# ---------------------------------------------------------------- math
+
+[[family]]
+id = "math-float"
+match = ['air\.(?:fast_)?(?:acos|acosh|asin|asinh|atan|atan2|atanh|ceil|copysign|cos|cosh|cospi|divide|exp|exp2|exp10|fabs|fdim|floor|fma|fmax|fmax3|fmedian3|fmin|fmin3|fmod|fract|frexp|ilogb|ldexp|log|log2|log10|modf|nextafter|pow|powr|rint|round|rsqrt|sin|sincos|sinh|sinpi|sqrt|tan|tanh|tanpi|trunc|saturate|mix|smoothstep|step|sign)(?:\.(?:v\d+)?(?:f16|f32|i32|i16))*',
+         'air\.(?:fast_)?clamp(?:\.(?:v\d+)?(?:f16|f32))*']
+kind = "function"
+msl = "Table 6.4 math functions and the floating-point common functions of Table 6.1 (fast_ prefix: fast-math variant)"
+decision = "numerics"
+wgsl = "per numerics.toml row"
+reason = "Accuracy, fast-math and precise decisions per function are the rows of numerics.toml (id = the function name without fast_)."
+probe = ["math_acos_f", "math_acos_h", "math_sin_f", "math_fma_f", "math_clamp_f", "math_ldexp_f", "math_sincos_f"]
+cite = [
+  { src = "msl", ref = "6.6", quote = "Table 6.4. Math functions in the Metal standard library" },
+  { src = "msl", ref = "6.3", quote = "Table 6.1. Common functions in the Metal standard library" },
+  { measure = "air-probe", case = "math_acos_f", quote = "air.fast_acos.f32" },
+]
+
+[[family]]
+id = "math-geometric"
+match = ['air\.(?:fast_)?(?:dot|distance|distance_squared|length|length_squared|normalize|cross|reflect|refract|faceforward)(?:\.(?:v\d+)?(?:f16|f32))+', 'air\.dot']
+kind = "function"
+msl = "Table 6.11 geometric functions"
+decision = "numerics"
+wgsl = "per numerics.toml row"
+reason = "Rows dot, cross, length, distance, normalize, reflect (polyfill: MSL normalizes N), refract and faceforward of numerics.toml."
+probe = ["geom_dot", "geom_length", "geom_normalize"]
+cite = [
+  { src = "msl", ref = "6.9", quote = "Table 6.11. Geometric functions in the Metal standard library" },
+  { measure = "air-probe", case = "geom_dot", quote = "air.dot.v4f32" },
+]
+
+[[family]]
+id = "math-not-in-msl"
+match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:fast_|half_|native_)?(?:acospi|asinpi|atanpi|atan2pi|cbrt|erf|erfc|expm1|hypot|lgamma|lgamma_r|log1p|logb|remainder|remquo|rootn|pown|tgamma|mad)(?:\..*)?',
+         'air\.(?:half|native)_(?:cos|sin|tan|exp|exp2|exp10|log|log2|log10|powr|rsqrt|sqrt)']
+kind = "function"
+msl = "none"
+decision = "not-from-msl"
+wgsl = "none"
+reason = "OpenCL-style math entry points of the shared front end. MSL's math table defines none of them and no system metallib calls them."
+cite = [
+  { src = "msl", ref = "6", absent = '\b(acospi|asinpi|atanpi|atan2pi|cbrt|erfc?|expm1|hypot|lgamma|lgamma_r|log1p|logb|remainder|remquo|rootn|pown|tgamma|native_(cos|sin|exp|log|sqrt)|half_(cos|sin|exp|log|sqrt))\(' },
+]
+
+[[family]]
+id = "integer"
+match = ['air\.(?:abs|abs_diff|add_sat|clamp|hadd|mad_hi|mad_sat|max|max3|median3|min|min3|mul_hi|rhadd|sub_sat|mad24|mul24|extract_bits|insert_bits)\.[su](?:\.(?:v\d+)?i(?:8|16|32|64))?',
+         'air\.(?:clz|ctz|popcount|reverse_bits|rotate)(?:\.(?:v\d+)?i(?:8|16|32|64))?',
+         'air\.(?:abs|abs_diff|add_sat|hadd|mad_hi|mad_sat|max|max3|median3|min|min3|mul_hi|rhadd|sub_sat|mad24|mul24|extract_bits|insert_bits)']
+kind = "function"
+msl = "Table 6.2 integer functions"
+decision = "lowering"
+owner = "S5"
+wgsl = "i32/u32 arithmetic and the integer built-ins of WGSL 17.5 (countLeadingZeros, countTrailingZeros, countOneBits, reverseBits, extractBits, insertBits, min, max, clamp, abs) where their definition matches; 8- and 16-bit forms re-wrapped, 64-bit forms as vec2<u32> (plan 5.2)"
+reason = "Integer operations are exact in both languages; the forms WGSL lacks (absdiff, addsat, hadd, rhadd, mulhi, madhi, madsat, subsat, rotate, mul24, mad24, max3, min3, median3) are exact integer sequences. Each function's definition is matched against its MSL Table 6.2 entry by S5."
+probe = ["int_clz_i32s", "int_absdiff_i32s", "int_mul24_i32s", "int_mad24_i32u", "int_extract_bits_i32u"]
+cite = [
+  { src = "msl", ref = "6.4", quote = "Table 6.2. Integer functions in the Metal standard library" },
+  { src = "wgsl", ref = "#countLeadingZeros-builtin", quote = "countLeadingZeros" },
+  { measure = "air-probe", case = "int_clz_i32s", quote = "air.clz.i32" },
+]
+
+[[family]]
+id = "relational"
+match = ['air\.(?:all|any)(?:\.v\d+i1)?']
+kind = "function"
+msl = "Table 6.3 relational functions all and any (the others lower to plain comparisons)"
+decision = "native"
+wgsl = "all, any"
+reason = "Both reduce a boolean vector with logical and/or."
+probe = ["rel_all", "rel_any"]
+cite = [
+  { src = "msl", ref = "6.5", quote = "Table 6.3. Relational functions in the Metal standard library" },
+  { src = "wgsl", ref = "#all-builtin", quote = "17.3.1. all" },
+  { measure = "air-probe", case = "rel_all", quote = "air.all.v4i1" },
+]
+
+[[family]]
+id = "conversion"
+match = ['air\.convert(?:\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64))?']
+kind = "function"
+msl = "static_cast and implicit conversions (2.23, 2.24, 8.6)"
+decision = "lowering"
+owner = "S5"
+wgsl = "value constructors plus explicit NaN and rounding handling"
+reason = "Rules and lowering in numerics.toml question 5.3-conversions."
+probe = ["conv_f2s", "conv_s2f", "conv_l2f"]
+cite = [
+  { src = "msl", ref = "2.23", quote = "The static_cast operator converts from a scalar or vector type to another scalar or vector type using the default rounding mode with no saturation" },
+  { measure = "air-probe", case = "conv_f2s", quote = "air.convert.s.i32.f.f32" },
+]
+
+[[family]]
+id = "conversion-explicit-rounding"
+match = ['air\.convert\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)\.[fsu]\.(?:v\d+)?(?:f16|f32|i1|i8|i16|i32|i64)(?:\.rt[enpz](?:\.sat)?|\.sat)']
+kind = "function"
+msl = "none"
+decision = "not-from-msl"
+wgsl = "none"
+reason = "Conversions with an explicit rounding mode or saturation are front-end entries for OpenCL-style convert_T_rtX_sat; MSL's static_cast has neither, and no system metallib uses them."
+cite = [
+  { src = "msl", ref = "2.23", quote = "with no saturation" },
+  { src = "msl", ref = "6", absent = '\bconvert_\w+_rt[enpz]' },
+]
+
+[[family]]
+id = "pack-unpack"
+match = ['air\.(?:un)?pack\.[a-z0-9]+(?:\.[a-z0-9]+)*', 'air\.(?:un)?pack']
+kind = "function"
+msl = "6.15 pack and unpack functions"
+decision = "lowering"
+owner = "S5"
+wgsl = "pack4x8unorm, pack2x16snorm and the other 17.9/17.10 built-ins where the conversion rule matches; otherwise exact integer code"
+reason = "MSL's pack and unpack conversions follow its normalized-integer rules (8.7.1); WGSL's pack built-ins state their own formulas, which S5 matches per function, falling back to exact integer code (e.g. rgb10a2, rgb565, srgb forms that WGSL lacks)."
+probe = ["pack_pack_float_to_unorm4x8", "unpack_unpack_unorm4x8_to_float", "unpack_unpack_unorm565_to_float"]
+cite = [
+  { src = "msl", ref = "6.15", quote = "6.15 Pack and Unpack Functions" },
+  { src = "wgsl", ref = "#pack-builtin-functions", quote = "17.9. Data Packing Built-in Functions" },
+]
+
+# ---------------------------------------------------------------- fragment and stage functions
+
+[[family]]
+id = "derivative"
+match = ['air\.(?:dfdx|dfdy|fwidth)(?:\.(?:v\d+)?f(?:16|32))?']
+kind = "function"
+msl = "Table 6.19 dfdx, dfdy, fwidth"
+decision = "native"
+wgsl = "dpdxFine, dpdyFine, fwidthFine"
+reason = "MSL returns a high precision partial derivative, which is the fine variant; MSL states no accuracy bound and WGSL states an infinite ULP bound. Non-uniform control flow: numerics.toml question 5.3-derivative-uniformity."
+probe = ["frag_dfdx_f", "frag_fwidth_h"]
+cite = [
+  { src = "msl", ref = "6.11.1.1", quote = "T dfdx(T p) Returns a high precision partial derivative of the specified value with respect to the screen space x coordinate." },
+  { src = "wgsl", ref = "#dpdxFine-builtin", quote = "17.6.3. dpdxFine" },
+  { measure = "air-probe", case = "frag_dfdx_f", quote = "air.dfdx.f32" },
+]
+
+[[family]]
+id = "discard"
+match = ['air\.discard_fragment']
+kind = "function"
+msl = "discard_fragment"
+decision = "lowering"
+owner = "S6b"
+wgsl = "discard"
+reason = "WGSL discard demotes to a helper invocation, MSL 2.3 and later's rule; for MSL 2.2 and earlier, intrinsics.toml question 5.6-discard."
+probe = ["frag_discard"]
+cite = [
+  { src = "msl", ref = "6.11.1.3", quote = "void discard_fragment(void) Marks the current fragment as terminated and discards this fragment's output of the fragment function." },
+  { src = "wgsl", ref = "#discard-statement", quote = "A discard statement converts the invocation into a helper invocation and throws away the fragment output." },
+  { measure = "air-probe", case = "frag_discard", quote = "air.discard_fragment" },
+]
+
+[[family]]
+id = "sample-queries"
+match = ['air\.get_num_samples(?:\.i32)?', 'air\.get_sample_position(?:\..*)?']
+kind = "function"
+msl = "Table 6.20 get_num_samples, get_sample_position"
+decision = "lowering"
+owner = "S6b"
+wgsl = "executor-provided values: the attachment sample count, and positions from the standard pattern"
+reason = "WGSL has no query for the framebuffer sample count or sample positions. The count is per-pipeline state the executor passes; positions are WebGPU's standard pattern, which equals Metal's default for count 4 (limits.toml question 6.4-sample-positions-4x); counts other than 1 and 4 are refused at pipeline creation."
+probe = ["frag_num_samples", "frag_sample_position"]
+cite = [
+  { src = "msl", ref = "6.11.1.2", quote = "Table 6.20. Samples fragment functions in the Metal standard library" },
+  { measure = "air-probe", case = "frag_num_samples", quote = "air.get_num_samples" },
+]
+
+[[family]]
+id = "pull-model-interpolation"
+match = ['air\.interpolate_(?:center|centroid|offset|sample)_(?:no_)?perspective(?:\..*)?', 'air\.interpolant_type', 'air\.interpolation_function']
+kind = "function"
+msl = "6.12 pull-model interpolation (interpolant<T, P>)"
+decision = "refusal"
+wgsl = "none"
+reason = "WGSL interpolates inputs only by their declared @interpolate attribute; it has no function to interpolate at a chosen sample, offset or centroid. Whether the A10X accepts pull-model interpolation is a device question (intrinsics.toml question 5.3-interpolate-at)."
+probe = ["frag_interpolant"]
+cite = [
+  { src = "msl", ref = "6.12", quote = "All OS: Metal 2.3 and later support pull-model interpolation." },
+  { src = "wgsl", ref = "#builtin-functions", absent = '\binterpolateAt' },
+  { measure = "air-probe", case = "frag_interpolant", quote = "air.interpolate_center_perspective.v2f32" },
+]
+
+# ---------------------------------------------------------------- textures
+
+[[family]]
+id = "texture-sample"
+match = ['air\.sample_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube)(?:_grad)?(?:\.[a-z0-9]+)*',
+         'air\.sample_compare_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube)(?:_grad)?(?:\.[a-z0-9]+)*',
+         'air\.sample_texture', 'air\.sample_depth', 'air\.sample_compare_']
+kind = "function"
+msl = "texture sample and sample_compare member functions (6.13)"
+decision = "lowering"
+owner = "S6a"
+wgsl = "textureSample, textureSampleLevel, textureSampleBias, textureSampleGrad, textureSampleCompare, textureSampleCompareLevel"
+reason = "Plan section 5.7 rows: offsets native; min-LOD clamp, bias range and compare with LOD by the stated emulations or Refusal; 1D arrays as 2D arrays; vertex and compute stages sample with an explicit level in both languages (question 5.7-sample-outside-fragment)."
+probe = ["tex_sample_2d", "tex_sample_2d_implicit", "tex_sample_2d_options", "tex_sample_compare_depth_2d"]
+cite = [
+  { src = "msl", ref = "6.13", quote = "Overloaded variants of the texture sample and sample_compare functions with an lod_options argument are available" },
+  { src = "wgsl", ref = "#texturesamplelevel", quote = "17.7.13. textureSampleLevel" },
+  { measure = "air-probe", case = "tex_sample_2d", quote = "air.sample_texture_2d.v4f32" },
+]
+
+[[family]]
+id = "texture-read-write"
+match = ['air\.(?:read|write)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)(?:\.[a-z0-9]+)*',
+         'air\.(?:read|write)_(?:texture|depth)']
+kind = "function"
+msl = "texture read and write member functions (6.13)"
+decision = "lowering"
+owner = "S6a"
+wgsl = "textureLoad, textureStore"
+reason = "Read-only and write-only access map to textureLoad on sampled or read-only storage textures and textureStore on write-only storage textures; formats that are not storage-capable on the host are LOUD at pipeline creation; texture buffers go through the memory model (plan 5.7). access::read_write is above the A10X's family (family texture-fence)."
+probe = ["tex_read_2d", "tex_write_2d", "tex_read_2d_ms", "tex_buffer"]
+cite = [
+  { src = "msl", ref = "2.9", quote = "read — Without a sampler, a graphics or kernel function can only read the texture object." },
+  { src = "wgsl", ref = "#textureload", quote = "17.7.4. textureLoad" },
+  { src = "wgsl", ref = "#texturestore", quote = "17.7.15. textureStore" },
+  { measure = "air-probe", case = "tex_read_2d", quote = "air.read_texture_2d.v4f32" },
+]
+
+[[family]]
+id = "texture-gather"
+match = ['air\.gather(?:_compare)?_(?:texture|depth)_(?:2d_array|2d|cube_array|cube)(?:\.[a-z0-9]+)*', 'air\.gather_texture', 'air\.gather_depth', 'air\.gather_compare_depth']
+kind = "function"
+msl = "texture gather and gather_compare member functions (6.13)"
+decision = "lowering"
+owner = "S6a"
+wgsl = "textureGather, textureGatherCompare"
+reason = "Component selection and offsets map directly; depth gather returns depth values in both (formats.toml question 5.5-depth-texture-as-color)."
+probe = ["tex_gather_2d", "tex_gather_compare_depth_2d"]
+cite = [
+  { src = "wgsl", ref = "#texturegather", quote = "17.7.2. textureGather" },
+  { measure = "air-probe", case = "tex_gather_2d", quote = "air.gather_texture_2d.v4f32" },
+]
+
+[[family]]
+id = "texture-query"
+match = ['air\.get_(?:width|height|depth|array_size|num_mip_levels|num_samples)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)',
+         'air\.get_(?:width|height|depth|array_size|num_mip_levels|num_samples)_']
+kind = "function"
+msl = "texture get_width, get_height, get_depth, get_array_size, get_num_mip_levels, get_num_samples (6.13)"
+decision = "lowering"
+owner = "S6a"
+wgsl = "textureDimensions, textureNumLayers, textureNumLevels, textureNumSamples"
+reason = "Queries map to the WGSL queries; 1D textures stored as 2D report height 1 only through the 2D query, which the lowering does not expose; texture buffers report the element count the executor binds."
+probe = ["tex_query_2d", "tex_read_2d_ms"]
+cite = [
+  { src = "wgsl", ref = "#texturedimensions", quote = "17.7.1. textureDimensions" },
+  { measure = "air-probe", case = "tex_query_2d", quote = "air.get_width_texture_2d" },
+]
+
+[[family]]
+id = "texture-lod-query"
+match = ['air\.calculate_(?:clamped|unclamped)_lod_(?:texture|depth)_[a-z0-9_]+', 'air\.calculate_(?:clamped|unclamped)_lod_']
+kind = "function"
+msl = "calculate_clamped_lod and calculate_unclamped_lod (6.13)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Apple's family tables list texture LOD queries from Apple8; the A10X reports supportsQueryTextureLOD = 0 (plan 2.7)."
+probe = ["tex_calculate_lod"]
+cite = [
+  { src = "mfst", quote = "Query texture LOD 8 Metal 3 & 4 Apple8" },
+  { measure = "air-probe", case = "tex_calculate_lod", quote = "air.calculate_clamped_lod_texture_2d" },
+]
+
+[[family]]
+id = "texture-fence"
+match = ['air\.fence_(?:texture|depth)(?:_[a-z0-9_]+)?']
+kind = "function"
+msl = "texture fence() for access::read_write textures (6.13.17)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "fence() exists only for read_write textures, which Apple's family tables list from Apple4 (A10X: Apple3)."
+probe = ["tex_read_write_2d"]
+cite = [
+  { src = "msl", ref = "6.13.17", quote = "Texture types (including texture buffers) that you can declare with the access::read_write attribute support the fence function." },
+  { src = "mfst", quote = "Read/write textures in functions Metal 3 & 4 Apple4" },
+]
+
+[[family]]
+id = "texture-null"
+match = ['air\.(?:is_null|get_null)_(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)']
+kind = "function"
+msl = "is_null_texture (6.13.18) and null texture handles"
+decision = "emulation"
+plan = "5.7 (air.get_null_texture*, is_null_texture row)"
+wgsl = "none"
+reason = "WebGPU has no null binding; the handle test is done on the executor-provided null flag, with a dummy texture bound."
+probe = ["tex_null"]
+cite = [
+  { src = "msl", ref = "6.13.18", quote = "If the texture is a null texture, is_null_texture returns true; otherwise, return false" },
+  { measure = "air-probe", case = "tex_null", quote = "air.is_null_texture_2d" },
+]
+
+[[family]]
+id = "texture-atomic"
+match = ['air\.atomic_[a-z_]+_explicit_(?:texture|depth)_[a-z0-9_]+(?:\.[a-z0-9]+)*', 'air\.atomic_compare_exchange_weak_explicit_']
+kind = "function"
+msl = "texture atomic member functions"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Apple's family tables list texture atomics from Apple6."
+cite = [
+  { src = "mfst", quote = "Texture atomics Metal 3 & 4 Apple6" },
+]
+
+[[family]]
+id = "texture-not-in-msl"
+match = ['air\.get_channel_(?:data_type|order)_(?:[a-z0-9_]+)?', 'air\.get_unique_id_(?:texture|depth)', 'air\.get_unique_identifier_(?:(?:texture|depth)_[a-z0-9_]+|sampler|command_buffer|compute_pipeline_state|render_pipeline_state)?', 'air\.get_unique_identifier']
+kind = "function"
+msl = "none"
+decision = "not-from-msl"
+wgsl = "none"
+reason = "Image channel queries and unique-identifier queries are front-end entries that the MSL specification does not define and no system metallib calls."
+cite = [
+  { src = "msl", ref = "6", absent = '\bget_channel_(data_type|order)\b|\bget_unique_identifier\b|\bget_resource_id\b' },
+]
+
+# ---------------------------------------------------------------- atomics and synchronization
+
+[[family]]
+id = "atomic-int32"
+match = ['air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.[su]\.i32',
+         'air\.atomic\.(?:global|local)\.(?:add|sub|and|or|xor|min|max|xchg|cmpxchg\.weak|load|store)\.i32',
+         'air\.atomic', 'air\.atomic\.global']
+kind = "function"
+msl = "32-bit atomic functions on device and threadgroup memory (6.16)"
+decision = "lowering"
+owner = "S6d"
+wgsl = "atomicLoad, atomicStore, atomicAdd, atomicSub, atomicAnd, atomicOr, atomicXor, atomicMin, atomicMax, atomicExchange, atomicCompareExchangeWeak"
+reason = "Plan section 5.8: the region is declared array<atomic<u32>> and MSL's relaxed order is refined by WGSL's ordering."
+probe = ["atomic_fetch_add_int_device", "atomic_fetch_add_uint_threadgroup", "atomic_cmpxchg_device", "atomic_load_store_device"]
+cite = [
+  { src = "msl", ref = "6.16.4.5", quote = "Table 6.27. Atomic operations" },
+  { src = "wgsl", ref = "#atomic-rmw", quote = "17.8.3. Atomic Read-modify-write Arithmetic and Logical Functions" },
+  { measure = "air-probe", case = "atomic_fetch_add_int_device", quote = "air.atomic.global.add.s.i32" },
+]
+
+[[family]]
+id = "atomic-float"
+match = ['air\.atomic\.(?:global|local)\.[a-z.]+\.f32']
+kind = "function"
+msl = "atomic_float"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Floating-point atomics are listed from Apple7; the A10X reports supportsAtomicFloat = 0 (plan 2.7)."
+probe = ["atomic_float_add_device"]
+cite = [
+  { src = "mfst", quote = "Floating-point atomics Metal 3 & 4 Apple7" },
+  { measure = "air-probe", case = "atomic_float_add_device", quote = "air.atomic.global.add.f32" },
+]
+
+[[family]]
+id = "atomic-int64"
+match = ['air\.atomic\.(?:global|local)\.[a-z.]+\.(?:[su]\.)?i64']
+kind = "function"
+msl = "64-bit atomic functions (6.16.4.6)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "64-bit atomics are listed from Apple9."
+probe = ["atomic_ulong_max_device"]
+cite = [
+  { src = "mfst", quote = "64-bit atomics 7 Metal 3 & 4 Apple9" },
+]
+
+[[family]]
+id = "atomic-fence"
+match = ['air\.atomic\.fence']
+kind = "function"
+msl = "atomic_thread_fence (6.16.3)"
+decision = "refusal"
+wgsl = "none"
+reason = "atomic_thread_fence is MSL 3.2 and later; iOS 17 (the target) supports MSL up to 3.1, so no target library can contain it. Refused if met."
+cite = [
+  { src = "msl", ref = "6.16.3", quote = "All OS: Metal 3.2 and later support atomic_thread_fence for Apple silicon." },
+  { src = "msl", ref = "1.6.10", quote = "metal3.1: Supports the unified graphics and computing language revision 3.1 programs for iOS 17, iPadOS 17, macOS 14, tvOS 17, and visionOS 1." },
+]
+
+[[family]]
+id = "threadgroup-barrier"
+match = ['air\.wg\.barrier']
+kind = "function"
+msl = "threadgroup_barrier(mem_flags)"
+decision = "lowering"
+owner = "S6d"
+wgsl = "workgroupBarrier, storageBarrier, textureBarrier"
+reason = "The mem_flags argument selects the WGSL barriers (plan 5.7 flag-to-call table); both languages require every thread of the group to reach the barrier."
+probe = ["barrier_threadgroup_device", "barrier_threadgroup_threadgroup", "barrier_threadgroup_texture"]
+cite = [
+  { src = "msl", ref = "6.10.1", quote = "All threads in a threadgroup executing the kernel, fragment, mesh, or object need to execute this function before any thread can continue execution beyond the threadgroup_barrier." },
+  { src = "wgsl", ref = "#workgroupBarrier-builtin", quote = "17.11.3. workgroupBarrier" },
+  { measure = "air-probe", case = "barrier_threadgroup_device", quote = "air.wg.barrier" },
+]
+
+[[family]]
+id = "simdgroup-barrier"
+match = ['air\.simdgroup\.barrier']
+kind = "function"
+msl = "simdgroup_barrier(mem_flags)"
+decision = "open"
+wgsl = "none"
+reason = "SIMD barriers are on the A10X's family (Apple2 and later), but WGSL has no subgroup-scope barrier, and workgroupBarrier is not a substitute where the call is uniform only within the SIMD-group. Needs a decision on exact lowering (for example proof of workgroup uniformity) or Refusal."
+probe = ["barrier_simdgroup"]
+cite = [
+  { src = "mfst", quote = "SIMD barrier Metal 3 & 4 Apple2" },
+  { src = "wgsl", ref = "#sync-builtin-functions", absent = '\bsubgroupBarrier\b' },
+  { measure = "air-probe", case = "barrier_simdgroup", quote = "air.simdgroup.barrier" },
+]
+
+[[family]]
+id = "simd-quad-functions"
+match = ['air\.(?:simd|quad)_[a-z_]+(?:\.[a-z0-9]+)*', 'air\.get_(?:simdgroup_size|thread_index_in_simdgroup|thread_index_in_quadgroup|simdgroup_index_in_threadgroup|simdgroups_per_threadgroup|quadgroup_index_in_threadgroup|quadgroups_per_threadgroup|dispatch_simdgroups_per_threadgroup|dispatch_quadgroups_per_threadgroup|dispatch_threads_per_threadgroup)(?:\.[a-z0-9]+)*']
+kind = "function"
+msl = "SIMD-group and quad-group functions (6.10.2, 6.10.3)"
+decision = "device-unsupported"
+wgsl = "subgroup and quad built-ins exist behind the subgroups feature, but the A10X family has none of these functions"
+reason = "Apple's family tables list quad permute from Apple4, SIMD permute and quad ballot from Apple6, and the reductions from Apple7; system libraries carry these paths for later GPUs only (plan 2.8). D1 confirms supportsSIMDGroup."
+probe = ["simd_simd_sum", "simd_quad_shuffle"]
+cite = [
+  { src = "mfst", quote = "Quad-scoped permute operations Metal 3 & 4 Apple4" },
+  { src = "mfst", quote = "SIMD-scoped permute operations Metal 3 & 4 Apple6" },
+  { src = "mfst", quote = "SIMD-scoped reduction operations Metal 3 & 4 Apple7" },
+  { measure = "air-probe", case = "simd_simd_sum", quote = "air.simd_sum.f32" },
+]
+
+[[family]]
+id = "simdgroup-matrix"
+match = ['air\.simdgroup_matrix(?:_[a-z0-9_]+)?(?:\.[a-z0-9]+)*']
+kind = "function"
+msl = "SIMD-group matrix functions (6.8)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Listed from Apple7."
+cite = [
+  { src = "mfst", quote = "SIMD-scoped matrix multiply operations Metal 3 & 4 Apple7" },
+]
+
+[[family]]
+id = "undocumented-async-copy"
+match = ['air\.simdgroup_async_copy_[12]d(?:\.[a-z0-9]+)*', 'air\.(?:wait_simdgroup_events|get_null_simdgroup_event|is_null_simdgroup_event)', 'air\.is_uniform(?:\.[a-z0-9]+)*']
+kind = "function"
+msl = "none published"
+decision = "open"
+wgsl = "none"
+reason = "Used by system metallibs (corpus) but not defined by the MSL specification, so there is no specification to translate from. Which of these an A10X-selected path reaches, and their semantics, need characterization (corpus call sites and, where the device allows, measurement) before a decision."
+cite = [
+  { src = "msl", ref = "6", absent = '\bsimdgroup_async_copy\b|\bwait_simdgroup_events\b|\bis_uniform\b' },
+]
+
+# ---------------------------------------------------------------- feature families above the A10X
+
+[[family]]
+id = "imageblock-tile"
+match = ['air\.(?:load|store)\.(?:implicit_)?imageblock(?:\.[a-z0-9]+)*', 'air\.store\.imageblock\.mask', 'air\.get_imageblock_[a-z_]+',
+         'air\.write_imageblock_slice_to(?:_[a-z0-9_]*)?(?:\.[a-z0-9]+)*', 'air\.get_color_coverage_mask',
+         'air\.(?:imageblock|imageblock_data|imageblock_data_size|imageblock_master|imageblock_type|implicit_imageblock_data|alias_implicit_imageblock|alias_implicit_imageblock_render_target|ci_imageblock)',
+         'air\.(?:pixel_position_in_tile|pixels_per_tile|tile_index|raster_order_group|post_depth_coverage)', 'air\.store']
+kind = "function"
+msl = "imageblocks, tile functions and raster order groups (2.11, 5.6, 6.14)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Imageblocks, tile shaders, raster order groups and post-depth coverage are listed from Apple4 (plan 5.7: rejected as on device)."
+cite = [
+  { src = "mfst", quote = "Imageblocks Metal 3 & 4 Apple4" },
+  { src = "mfst", quote = "Tile shaders Metal 3 & 4 Apple4" },
+  { src = "mfst", quote = "Raster order groups Metal 3 & 4 Apple4" },
+]
+
+[[family]]
+id = "rasterization-rate"
+match = ['air\.map_(?:screen_to_physical|physical_to_screen)_coordinates(?:\.[a-z0-9]+)*']
+kind = "function"
+msl = "variable rasterization rate (6.18)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Listed from Apple6."
+cite = [
+  { src = "mfst", quote = "Variable rasterization rate Metal 3 & 4 Apple6" },
+]
+
+[[family]]
+id = "ray-tracing"
+match = ['air\.intersect(?:\.[a-z_]+)*', 'air\.[a-z_]*intersection_query(?:\.[a-z_]+)*(?:\.[a-z0-9]+)*', 'air\.[a-z_]*acceleration_structure[a-z_]*',
+         'air\.[a-z_]*intersection_function_table[a-z_]*(?:\.[a-z0-9]+)*', 'air\.(?:accept_intersection|continue_search|intersection|bounding_box|triangle_data|curve_data|curve|curve_parameter|instancing|multi_level_instancing|world_space_data|instance_motion|primitive_motion|extended_limits|max_levels|key_frame_count|motion_start_time|motion_end_time|opaque_primitive|origin|direction|min_distance|max_distance|distance|world_space_origin|world_space_direction|object_to_world_transform|world_to_object_transform|geometry_id|primitive_data|user_instance_id|user_instance_id_count|instance_id_count|geometry_intersection_function_table_offset|instance_intersection_function_table_offset|triangle|time|projective_coordinates)',
+         'air\.get_(?:primitive|instance)_acceleration_structure(?:_[a-z_]+)?', 'air\.get_data_pointer_[a-z_]*', 'air\.get_instance_count_[a-z_]*']
+kind = "function"
+msl = "ray tracing types and functions (2.17, 5.1.6, 6.19)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Ray tracing is listed from Apple6; WebGPU has none (plan 5.7: LOUD where a device would accept it)."
+cite = [
+  { src = "mfst", quote = "Ray tracing in compute pipelines Metal 3 & 4 Apple6" },
+  { src = "msl", ref = "6.19", quote = "6.19 Ray-Tracing Functions" },
+]
+
+[[family]]
+id = "function-tables-dynamic"
+match = ['air\.[a-z_]*visible_function_table(?!s)[a-z_]*', 'air\.(?:function_pointer|function_type|function_group|function_groups|dyld_flat_table|dyld_lib_table|dyld_str_table|global_binding|global_bindings)']
+kind = "function"
+msl = "visible functions, function tables and dynamic libraries (2.15, 5.1.4, 5.9)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Function pointers and dynamic libraries are listed from Apple6; global built-ins and bindings from Apple6; the A10X reports supportsDynamicLibraries = 0 (plan 2.7)."
+cite = [
+  { src = "mfst", quote = "Function pointers in compute pipelines Metal 3 & 4 Apple6" },
+  { src = "mfst", quote = "Compute dynamic libraries Metal 3 & 4 Apple6" },
+  { src = "mfst", quote = "Global built-ins and bindings Metal 3 & 4 Apple6" },
+]
+
+[[family]]
+id = "mesh-object"
+match = ['air\.set_[a-z_]+_mesh(?:_properties)?', 'air\.(?:mesh|mesh_grid_properties|mesh_grid_properties_type|mesh_primitive_data|mesh_type|mesh_type_info|mesh_vertex_data|object|object_threadgroup_position_in_grid|payload|max_mesh_work_groups|primitive_culled|primitive_culled_attr|amplification_count|amplification_id)']
+kind = "function"
+msl = "mesh and object functions, vertex amplification (5.1.7, 5.1.8, 2.20)"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Mesh shading is listed from Apple7 and vertex amplification from Apple6; the A10X reports supportsMeshShaders = 0 and supportsVertexAmplification = 0 (plan 2.7)."
+cite = [
+  { src = "mfst", quote = "Mesh shading Metal 3 & 4 Apple7" },
+  { src = "mfst", quote = "Vertex amplification Metal 3 & 4 Apple6" },
+]
+
+[[family]]
+id = "icb-encoding"
+match = ['air\.(?:set_(?:vertex|fragment|kernel)_buffer|set_pipeline_state|set_stage_in_region|set_threadgroup_memory_length|draw_primitives|draw_indexed_primitives|dispatch_threadgroups|concurrent_dispatch_threadgroups|concurrent_dispatch_threads|reset|copy)_(?:render|compute)_command(?:\.[a-z0-9]+)*', 'air\.(?:set_barrier|clear_barrier)_compute_command',
+         'air\.(?:draw_|draw_indexed_primitives|set_vertex_buffer|set_fragment_buffer|set_kernel_buffer|set_stage_in_region_compute|get_size_command_buffer|command_buffer|command_buffer_type|indirect_command_buffer|compute_pipeline_state|compute_pipeline_state_type|render_pipeline_state|render_pipeline_state_type)']
+kind = "function"
+msl = "encoding commands into indirect command buffers (6.17)"
+decision = "emulation"
+plan = "5.7 indirect command buffer row"
+wgsl = "none"
+reason = "Render and compute indirect command buffers are on the A10X's family; WebGPU has none. GPU-encoded commands write the plugin-defined ICB layout through the memory model and are executed by the executor (plan 5.7). Barriers in render ICBs and tessellation or mesh commands are not on the family (families icb-encoding-unsupported, mesh-object)."
+cite = [
+  { src = "mfst", quote = "Indirect command buffers (rendering) Metal 3 & 4 Apple3" },
+  { src = "mfst", quote = "Indirect command buffers (compute) Metal 3 & 4 Apple3" },
+  { src = "msl", ref = "6.17", quote = "ICBs for both render and compute commands use the command_buffer type to encode commands into an ICB object" },
+]
+
+[[family]]
+id = "icb-encoding-unsupported"
+match = ['air\.(?:draw_patches|draw_indexed_patches)(?:_render_command)?(?:\.[a-z0-9]+)*', 'air\.(?:draw_mesh_threadgroups|draw_mesh_threads|set_mesh_buffer|set_object_buffer|set_object_threadgroup_memory_length|set_imageblock_size)_(?:render|compute)_command(?:\.[a-z0-9]+)*', 'air\.(?:set_barrier|clear_barrier)_render_command']
+kind = "function"
+msl = "ICB commands for tessellation, mesh, imageblocks and render barriers"
+decision = "device-unsupported"
+wgsl = "none"
+reason = "Tessellation in ICBs is listed from Apple5, render-ICB memory barriers from Apple9, mesh draws from Apple9 and imageblocks from Apple4."
+cite = [
+  { src = "mfst", quote = "Tessellation in indirect command buffers Metal 3 Apple5" },
+  { src = "mfst", quote = "Indirect command buffer support for memory barriers (rendering) Metal 3 & 4 Apple9" },
+]
+
+[[family]]
+id = "logging"
+match = ['air\.vprintf']
+kind = "function"
+msl = "logging functions (6.20)"
+decision = "refusal"
+wgsl = "none"
+reason = "Logging is MSL 3.2 and later; iOS 17 supports MSL up to 3.1."
+cite = [
+  { src = "msl", ref = "6.20", quote = "All OS: Metal 3.2 and later support logging for Apple silicon." },
+]
+
+[[family]]
+id = "opencl-front-end"
+match = ['air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))(?:vload|vstore|vload_half|vstore_half|vloada_half|vstorea_half)(?:\.[a-z0-9]+)*', 'air\.(?!(?:.*\.)?(?:v\d+)?f64(?:\.|$))shuffle2?(?:\.[a-z0-9]+)*',
+         'air\.(?:get_global_id|get_global_offset|get_global_size|get_group_id|get_local_id|get_local_linear_id|get_local_size|get_num_groups|get_work_dim|async_wg_copy|async_wg_strided_copy|wait_wg_events|get_null_wg_event|global_id|global_size|group_id|local_id|local_linear_id|local_size|num_groups|work_group_size|work_group_size_hint|vec_type_hint|rounding_mode|emulated_tls)']
+kind = "function"
+msl = "none"
+decision = "not-from-msl"
+wgsl = "none"
+reason = "OpenCL work-item, vector load/store, shuffle and async-copy entries of the shared front end; MSL defines none of them and no system metallib uses them."
+cite = [
+  { src = "msl", ref = "6", absent = '\b(vload|vstore|shuffle2|get_global_id|get_local_id|async_work_group_copy|wait_group_events)\w*\(' },
+]
+
+# ---------------------------------------------------------------- function constants and module structure
+
+[[family]]
+id = "function-constants"
+match = ['air\.is_function_constant_defined', 'air\.normalize_function_constant_predicate(?:\.[a-z0-9]+)*', 'air\.function_constant', 'air\.function_constants', 'air\.function_constant_predicate_attr', 'air\.fc_initializer']
+kind = "function"
+msl = "program scope function constants (5.8)"
+decision = "lowering"
+owner = "S3"
+wgsl = "none needed: constants are folded by specialization before WGSL is emitted"
+reason = "Function constants are resolved by canonicalization (plan 5.1 stage 5) from the values the pipeline supplies; unresolved predicates after specialization are a compiler error."
+probe = ["function_constant"]
+cite = [
+  { src = "msl", ref = "5.8", quote = "5.8 Program Scope Function Constants" },
+  { measure = "air-probe", case = "function_constant", quote = "air.is_function_constant_defined" },
+]
+
+[[family]]
+id = "static-init"
+match = ['air\.(?:static_init|tls_static_init|external_initializations|externally_initialized|externally_defined)']
+kind = "metadata"
+msl = "program scope variables with dynamic initialization"
+decision = "lowering"
+owner = "S3"
+wgsl = "none needed: constructors run during canonicalization"
+reason = "air.static_init constructors and externally initialized globals are run or bound by canonicalization (plan 5.1 stage 5, 2.8 probe)."
+cite = [
+  { src = "msl", ref = "5.8", quote = "5.8 Program Scope Function Constants" },
+]
+
+# ---------------------------------------------------------------- metadata
+
+[[family]]
+id = "metadata-entry-points"
+match = ['air\.(?:vertex|fragment|kernel|compile_options|version|language_version|source_file_name|requestHash|rename_qualified_function_signature|sampler_states|sampler_state|packedVertexFunction|packedFragmentFunction|vertexFetchFunction|vertexDumpFunction|emulation|disabled)']
+kind = "metadata"
+msl = "graphics and kernel entry points (5.1) and module records"
+decision = "metadata"
+owner = "S2"
+wgsl = "@vertex, @fragment, @compute entry points"
+reason = "Named metadata and module records; S2 decodes them (plan 5.1 stage 4) and verifies against real Metal reflection (plan 10.3). AIR metadata has no published specification, so the decoding is defined by the probe and corpus modules."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "5.1", quote = "5.1 Functions" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.vertex" },
+]
+
+[[family]]
+id = "metadata-compile-flags"
+match = ['air\.compile\.(?:denorms_disable|denorms_enable|fast_math_disable|fast_math_enable|framebuffer_fetch_disable|framebuffer_fetch_enable)', 'air\.compile']
+kind = "metadata"
+msl = "compiler options recorded in the module (1.6)"
+decision = "metadata"
+owner = "S2"
+wgsl = "none"
+reason = "fast_math selects the fast or precise numerics columns; denorms flags change nothing (numerics.toml question 5.3-denormals); framebuffer_fetch marks programmable blending (plan 5.9)."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "1.6.3", quote = "1.6.3 Math Intrinsics Compiler Options" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.compile.fast_math_enable" },
+]
+
+[[family]]
+id = "metadata-arguments"
+match = ['air\.(?:buffer|indirect_buffer|texture|sampler|threadgroup|imageblock_data_unused|constant|byval|stage_in|vertex_input|fragment_input|vertex_output|patch_input|patch_control_point_input|indirect_argument|indirect_constant|struct_type_info|arg_name|arg_type_name|arg_type_size|arg_type_align_size|arg_unused|address_space|location|location_index|location_count|location_index_attr|read|write|read_write|read_only|write_only|buffer_size|buffer_stride|bounds_checked_buffer_type|render_target|render_target_attr|user_attr|shared|shared_attr|max_constant_buffers|max_device_buffers|max_read_write_textures|max_samplers|max_textures|max_threadgroup_buffers|max_work_group_size|control_point_index_buffer|uniform)']
+kind = "metadata"
+msl = "resource, argument and stage-interface attributes (5.2)"
+decision = "metadata"
+owner = "S2"
+wgsl = "@group/@binding resources and @location interface variables, assigned by the compiler (plan 5.5, 5.10)"
+reason = "Argument records describe buffers, textures, samplers, argument buffers, stage inputs and outputs; S2 decodes them into the binding layout and reflection."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "5.2.1", quote = "5.2.1 Locating Buffer, Texture, and Sampler Arguments" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.struct_type_info" },
+]
+
+[[family]]
+id = "metadata-builtins"
+match = ['air\.(?:position|position_attr|point_size|point_size_attr|point_coord|clip_distance|clip_distance_attr|clip_distance_array_size|vertex_id|instance_id|base_vertex|base_instance|front_facing|sample_id|sample_mask|sample_mask_in|depth|depth_qualifier|stencil|invariant|invariant_attr|greater|less|patch_id|position_in_patch|thread_position_in_grid|thread_position_in_threadgroup|thread_index_in_threadgroup|threads_per_grid|threads_per_threadgroup|threadgroup_position_in_grid|threadgroups_per_grid|dispatch_threads_per_threadgroup|stage_in_grid_origin|stage_in_grid_size|get_stage_in_grid_origin|get_stage_in_grid_size|get_num_patch_control_points)']
+kind = "metadata"
+msl = "built-in input and output attributes (5.2.3)"
+decision = "metadata"
+owner = "S6b"
+wgsl = "@builtin values where they exist; executor-provided values otherwise (plan 5.7, 5.10)"
+reason = "Each attribute's handling is a plan section 5.7 or 5.10 row: position, vertex/instance index, front facing, sample index and mask, frag depth and compute ids are WGSL built-ins; point size, clip distances and stencil output have the stated emulations or refusals."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "5.2.3.1", quote = "Table 5.2. Attributes for vertex function input arguments" },
+  { src = "msl", ref = "5.2.3.6", quote = "Table 5.8. Attributes for kernel function input arguments" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.position" },
+]
+
+[[family]]
+id = "metadata-interpolation"
+match = ['air\.(?:center|centroid|sample|flat|perspective|no_perspective)']
+kind = "metadata"
+msl = "sampling and interpolation attributes (5.4)"
+decision = "metadata"
+owner = "S6b"
+wgsl = "@interpolate(perspective|linear|flat, center|centroid|sample)"
+reason = "Plan 5.3: Metal's flat provoking vertex is the first, matching WGSL flat with first."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "5.4", quote = "5.4 Sampling and Interpolation Attributes" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.perspective" },
+]
+
+[[family]]
+id = "metadata-tessellation"
+match = ['air\.(?:patch|patch_control_point|patch_control_point_function|patch_control_point_type)']
+kind = "metadata"
+msl = "post-tessellation vertex functions (5.1.1.1)"
+decision = "emulation"
+plan = "5.7 tessellation row (package S6e)"
+wgsl = "none"
+reason = "Tessellation is on the A10X's family; WebGPU has none. LOUD at pipeline creation until the fixed-function tessellator emulation lands."
+cite = [
+  { src = "mfst", quote = "Tessellation Metal 3 Apple3" },
+  { src = "msl", ref = "5.1.1.1", quote = "5.1.1.1 Post-Tessellation Vertex Functions" },
+]
+
+[[family]]
+id = "metadata-types"
+match = ['air\.(?:(?:texture|depth)_(?:1d_array|1d|2d_ms_array|2d_ms|2d_array|2d|3d|cube_array|cube|buffer_1d)|void|bool|char|uchar|short|ushort|int|uint|long|ulong|llong|ullong|half|float|matrix|pointer|lvalue_reference|rvalue_reference|array|struct|sampler|vector|packed_vector|opaque|enum|union|unknown|array_of|array_ref_of|r8unorm|r8snorm|r16unorm|r16snorm|rg8unorm|rg8snorm|rg16unorm|rg16snorm|rgba8unorm|rgba8snorm|rgba16unorm|rgba16snorm|srgba8unorm|rgb10a2|rg11b10f|rgb9e5)_type',
+         'air\.(?:struct_type|array_type|vector_type|pointer_type|matrix_type|record_base|record_field)']
+kind = "metadata"
+msl = "argument and reflection type descriptions; pixel data types (2.7)"
+decision = "metadata"
+owner = "S2"
+wgsl = "none"
+reason = "Type tags feed reflection (MTLStructType and friends) and the memory-model layout; pixel data types (r8unorm<T> and others) select format conversions in loads and stores (plan 5.4). Stitching records describe functions the stitching compiler composes (plan 6.7)."
+cite = [
+  { src = "msl", ref = "2.7", quote = "Table 2.6. Metal pixel data types" },
+]
+
+[[family]]
+id = "unattributed"
+match = ['air\.(?:add|point|line)']
+kind = "metadata"
+msl = "none"
+decision = "open"
+wgsl = "none"
+reason = "Strings of MTLCompiler whose role is not identified from the binary alone; none is declared or used as metadata by any corpus or probe module. Refused if met until the role is established."
+cite = [
+  { src = "msl", ref = "6", absent = '\bair\.(add|point|line)\b' },
+]
+
+[[family]]
+id = "metadata-coreimage"
+match = ['air\.ci(?:_(?:array|builtin|matrix|padding|pointer|sampler|struct|texture))?']
+kind = "metadata"
+msl = "none published (CoreImage kernel records)"
+decision = "open"
+wgsl = "none"
+reason = "CoreImage's kernel libraries carry air.ci records consumed by CoreImage's own stitching. They are not defined by the MSL specification; whether the plugin ever receives modules that still carry them after the framework links CoreImage kernels needs checking against the framework path (G4)."
+cite = [
+  { src = "msl", ref = "6", absent = '\bair\.ci\b' },
+]
+
+[[family]]
+id = "builtins-above-family"
+match = ['air\.(?:barycentric_coord|primitive_id|primitive_id_attr|render_target_array_index|render_target_array_index_attr|viewport_array_index|viewport_array_index_attr)']
+kind = "metadata"
+msl = "barycentric coordinates, primitive id, layered rendering and viewport selection attributes (5.2.3)"
+decision = "device-unsupported"
+wgsl = "none needed on the target"
+reason = "Apple's family tables list barycentric coordinates and primitive ID from Apple7, and layered rendering and multiple viewports from Apple5 (plan 5.7 rows; D1 confirms)."
+cite = [
+  { src = "mfst", quote = "Barycentric coordinates Metal 3 & 4 Apple7" },
+  { src = "mfst", quote = "Primitive ID Metal 3 & 4 Apple7" },
+  { src = "mfst", quote = "Layered rendering Metal 3 & 4 Apple5" },
+  { src = "mfst", quote = "Multiple viewports Metal 3 & 4 Apple5" },
+]
+
+[[family]]
+id = "simdgroup-attributes"
+match = ['air\.(?:threads_per_simdgroup|thread_index_in_simdgroup|simdgroup_index_in_threadgroup|simdgroups_per_threadgroup|threads_per_quadgroup|thread_index_in_quadgroup|quadgroup_index_in_threadgroup|quadgroups_per_threadgroup|thread_execution_width|simdgroup_size|dispatch_simdgroups_per_threadgroup|dispatch_quadgroups_per_threadgroup)']
+kind = "metadata"
+msl = "SIMD-group and quad-group index attributes (5.2.3.6)"
+decision = "open"
+wgsl = "subgroup_size and subgroup_invocation_id need the subgroups feature and report the host's subgroup size"
+reason = "These attributes describe the device's SIMD-group partition (width 32 on the A10X per D1). WGSL can expose a host subgroup partition only with the subgroups feature and a host-chosen size, and MSL does not define how threads are grouped into SIMD-groups, so an exact lowering needs that grouping established (by measurement on the device) or the attributes are refused."
+probe = ["module-metadata"]
+cite = [
+  { src = "msl", ref = "5.2.3.6", quote = "Table 5.8. Attributes for kernel function input arguments" },
+  { src = "wgsl", ref = "#enable-extensions-sec", quote = "subgroups" },
+  { measure = "air-probe", case = "module-metadata", quote = "air.threads_per_simdgroup" },
+]
+
+[[family]]
+id = "visible-stitchable"
+match = ['air\.(?:visible|visible_input|visible_output|visible_padding|visible_function_reference|visible_function_references|signature|module_signature|linked_constants_signature|stitching_argument|stitching_info|stitching_type)']
+kind = "metadata"
+msl = "visible and stitchable functions (5.1.4, 5.1.5)"
+decision = "lowering"
+owner = "S3"
+wgsl = "none needed: directly called visible functions are linked and inlined"
+reason = "MSL lets functions call visible functions directly, the callee being supplied with the pipeline; stitchable functions are visible functions with extra metadata for the stitching graph. Canonicalization links and inlines them (plan 5.1 stage 5); calls through function pointers or tables are the separate family function-tables-dynamic."
+cite = [
+  { src = "msl", ref = "5.1.4", quote = "It is legal for other functions to directly call a visible function." },
+  { src = "msl", ref = "5.1.5", quote = "The [[stitchable]] attribute implies [[visible]], which means that stitchable functions can be used in all contexts where a visible function can be used as described in Sec 5.1.4." },
+]
