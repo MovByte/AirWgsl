@@ -2,6 +2,7 @@
 //! moves, conversions MSL defines exactly) run on real Metal, on wgpu and on Dawn, with byte-identical results
 //! required. `AW_DAWN_NODE` names Dawn's `dawn.node`; without it the Dawn runs are reported as not done.
 
+mod corpus;
 mod harness;
 mod hooks;
 mod kernels;
