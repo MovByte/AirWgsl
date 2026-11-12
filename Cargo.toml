@@ -3,7 +3,7 @@ name = "airwgsl"
 version = "0.1.0"
 description = "AIR (Metal's LLVM bitcode) to WGSL compiler"
 edition = "2024"
-license = "BSD-2-Clause-Patent"
+license = "AGPL-3.0-only"
 
 [lib]
 path = "src/lib.rs"
