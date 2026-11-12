@@ -203,6 +203,69 @@ pub const ITEMS: &[Item] = &[
         reference: "D1 profile; Metal feature set tables (nonuniform threadgroup size from Apple4)",
     },
     Item {
+        id: "vertex-descriptor",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a vertex or stage-input descriptor real Metal refuses for the function: an attribute it does not \
+                  describe, a format the attribute's type cannot read, a stride or step function the framework rejects, \
+                  or a format or dynamic stride the A10X does not support",
+        reference: "plan 5.10; measured on Metal (src/stage/fetch.rs)",
+    },
+    Item {
+        id: "color-output-format",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a color output whose class or component count does not suit its attachment's pixel format",
+        reference: "MSL 5.2.3.5; measured on Metal (src/stage/fragment.rs)",
+    },
+    Item {
+        id: "color-output-alpha",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "blend factors that read the source alpha of a color output without an alpha component",
+        reference: "WebGPU 10.3.1 validating GPUFragmentState",
+    },
+    Item {
+        id: "sample-mask-input",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "the coverage mask input of a fragment function that runs per sample with several samples: WGSL lets \
+                  it be the one sample's bit, Metal gives the whole coverage mask (measured)",
+        reference: "WGSL 13.3.1.1 sample_mask",
+    },
+    Item {
+        id: "sample-mask-output",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a coverage mask output with alpha to coverage, which WebGPU refuses",
+        reference: "WebGPU 10.3 validating GPURenderPipelineDescriptor",
+    },
+    Item {
+        id: "early-fragment-tests",
+        owner: Some("S6b"),
+        kind: RefusalKind::NotImplemented,
+        summary: "[[early_fragment_tests]] on a fragment function that discards, writes memory, uses atomics, outputs a \
+                  coverage mask, or runs with alpha to coverage: the in-shader depth comparison under per-primitive \
+                  serialization (plan 5.7 with 5.9) is not implemented",
+        reference: "plan 5.7",
+    },
+    Item {
+        id: "early-fragment-tests-output",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a fragment function with [[early_fragment_tests]] that outputs depth or stencil",
+        reference: "MSL 5.1.2",
+    },
+    Item {
+        id: "point-size",
+        owner: Some("S6b"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a point size other than the constant 1, points with several samples per pixel, or [[point_coord]]: \
+                  the quad expansion needs Metal's point coverage rule measured on the A10X (limits.toml question \
+                  5.7-point-rasterization) and an executor pass plan",
+        reference: "plan 5.7",
+    },
+    Item {
         id: "framebuffer-fetch",
         owner: Some("S6c"),
         kind: RefusalKind::NotImplemented,

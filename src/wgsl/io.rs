@@ -3,10 +3,11 @@
 //! The entry point comes typed from the AIR semantic layer ([`crate::air`]). The mappings here are the direct ones,
 //! which need no emulation pass: buffer and threadgroup arguments (memory regions), the built-in values with an exact
 //! WGSL counterpart, user varyings matched by name, render-target and depth outputs. The registered stage rules
-//! ([`super::hooks::StageRule`]) are asked first; everything neither they nor these mappings lower (vertex input
-//! attributes, point size on point topologies, clip distances, layered rendering, sample masks, dual-source outputs,
-//! framebuffer fetch, textures, samplers, argument buffers) is refused with the tracked item of the package that
-//! lowers it. Each mapping is justified by the clause cited at it.
+//! ([`super::hooks::StageRule`]) are asked first (the stage interface package, [`crate::stage`], lowers vertex and
+//! stage-in attributes, color outputs, point sizes, coverage masks and the built-ins without a direct counterpart
+//! there); everything neither they nor these mappings lower (clip distances without the host feature, layered
+//! rendering, framebuffer fetch, textures, samplers, argument buffers) is refused with the tracked item of the package
+//! that lowers it. Each mapping is justified by the clause cited at it.
 
 use super::tracked;
 use crate::air::{EntryPoint, Interpolation, OutputRole, Role, Sampling, Slot};

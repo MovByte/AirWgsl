@@ -18,6 +18,7 @@ pub mod mem;
 pub mod mtlb;
 pub mod num;
 pub mod reflect;
+pub mod stage;
 pub mod sync;
 pub mod tex;
 pub mod wgsl;

@@ -228,8 +228,10 @@ fn a_stage_rule_lowers_an_argument_record() {
         }),
         bindings: Vec::new(),
     };
+    // The registered stage rules pull attributes through the vertex descriptor, which this pipeline lacks: real Metal
+    // refuses it.
     let r = compile(std::slice::from_ref(&m), &desc, &HostCaps::default()).unwrap_err();
-    assert!(r.reason.starts_with("[compiler:vertex-input]"), "{}", r);
+    assert!(r.reason.starts_with("[compiler:vertex-descriptor]"), "{}", r);
     let rules = Rules::new().with_stage(Box::new(Float4Attribute));
     let c = airwgsl::wgsl::compile_with(&[m], &desc, &HostCaps::default(), &rules, &Rounding::SoftFloat).unwrap();
     let src = &c.wgsl[0].source;

@@ -306,15 +306,10 @@ pub fn lower_stage(
     e.bindings = bindings.cloned();
     e.desc = Some(desc);
     e.prepare()?;
-    if iface.early_fragment_tests
-        && e.mem.regions.iter().any(|r| r.written && matches!(r.kind, RegionKind::Buffer { .. }))
-    {
-        return Err(tracked::refuse(
-            "stage-builtin",
-            "early_fragment_tests",
-            loc(),
-            "early fragment tests with buffer writes need the emulation of plan 5.7",
-        ));
+    if iface.early_fragment_tests {
+        let writes =
+            e.mem.regions.iter().any(|r| (r.written || r.atomic) && matches!(r.kind, RegionKind::Buffer { .. }));
+        crate::stage::fragment::early_fragment_tests(m, fi, &inp.entry, desc, writes)?;
     }
     for r in &e.mem.regions {
         if let RegionKind::Buffer { .. } = r.kind {
@@ -586,7 +581,8 @@ pub fn compile_with(
 }
 
 /// Lower one entry point on its own (for corpus checks): a kernel as a compute pipeline with `threads` threads per
-/// threadgroup, a vertex or fragment function as a render stage whose varyings are its own.
+/// threadgroup, a vertex or fragment function as a render stage whose varyings are its own, and `[[stage_in]]`
+/// attributes described as read in their own types.
 pub fn compile_entry(
     inp: &Input,
     host: &HostCaps,
@@ -594,19 +590,43 @@ pub fn compile_entry(
     threads: [u64; 3],
     tg_lengths: &[u64],
 ) -> R<(String, HostRequirements)> {
+    // `[[stage_in]]` attributes are read in their own types from one buffer (crate::stage::fetch::natural_layout).
+    let natural = crate::stage::fetch::natural_layout(&inp.module.ir, &inp.entry);
     let desc = match inp.stage {
         MetalStage::Kernel => PipelineDesc {
             kind: PipelineKind::Compute(ComputeState {
                 threads_per_threadgroup: threads,
                 non_uniform_grid: false,
                 threadgroup_memory_lengths: tg_lengths.to_vec(),
-                stage_input: None,
+                stage_input: natural.map(|(buffer, stride, attrs)| {
+                    let mut layouts = vec![(0, 0, 0); buffer as usize + 1];
+                    layouts[buffer as usize] = (stride, 5, 1);
+                    let mut attributes = Vec::new();
+                    for (index, format, offset) in attrs {
+                        attributes.resize(attributes.len().max(index as usize + 1), (0, 0, 0));
+                        attributes[index as usize] = (format, offset, buffer);
+                    }
+                    StageInputDescriptor { layouts, attributes, index_type: 0, index_buffer_index: 0 }
+                }),
             }),
             bindings: Vec::new(),
         },
         _ => PipelineDesc {
             kind: PipelineKind::Render(RenderState {
-                vertex_descriptor: None,
+                vertex_descriptor: natural.map(|(buffer, stride, attrs)| {
+                    let mut layouts =
+                        vec![VertexBufferLayout { stride: 0, step_function: 1, step_rate: 1 }; buffer as usize + 1];
+                    layouts[buffer as usize].stride = stride;
+                    let mut attributes = Vec::new();
+                    for (index, format, offset) in attrs {
+                        attributes.resize(
+                            attributes.len().max(index as usize + 1),
+                            VertexAttribute { format: 0, offset: 0, buffer_index: 0 },
+                        );
+                        attributes[index as usize] = VertexAttribute { format, offset, buffer_index: buffer };
+                    }
+                    VertexDescriptor { layouts, attributes }
+                }),
                 color_attachments: Vec::new(),
                 depth_attachment_pixel_format: 0,
                 stencil_attachment_pixel_format: 0,
