@@ -7,7 +7,7 @@
 //! one ulp where both results are rounded values of the same irrational number, or be one of the listed cases where
 //! the library follows a text (MSL, C99 Annex F, OpenCL C 7.5.1) and Metal on this GPU does not.
 
-use crate::gpu::{kernel_source, Kernel};
+use crate::gpu::{Kernel, kernel_source};
 use crate::prelude;
 
 const DATA: &str = include_str!("data/metal-precise-special.txt");
@@ -74,9 +74,13 @@ fn deliberate(name: &str, ops: &[u32], metal: u32, ours: u32) -> Option<&'static
         "mix" if opposite_zeros => Some("MSL Table 6.1: mix may be x + (y - x) * a, the form the library evaluates"),
         "sinpi" | "tanpi" if opposite_zeros => Some("OpenCL C 3.0 7.5.1: sinpi and tanpi zeros at integers"),
         "atan" if opposite_zeros => Some("C99 F.9.1.3: atan(+-0) is +-0"),
-        "round" if opposite_zeros => Some("C99 F.9.6.6 and OpenCL C 3.0 7.5.1: round(+-0) is +-0, round(-0.5 < x < 0) is -0"),
+        "round" if opposite_zeros => {
+            Some("C99 F.9.6.6 and OpenCL C 3.0 7.5.1: round(+-0) is +-0, round(-0.5 < x < 0) is -0")
+        }
         "fract" if opposite_zeros => Some("OpenCL C 3.0 7.5.1: fract(-0) and fract(-inf) are -0"),
-        "atan2" if opposite_zeros => Some("MSL 8.5: a result flushed to zero has an undefined sign (the exact result rounds to -0)"),
+        "atan2" if opposite_zeros => {
+            Some("MSL 8.5: a result flushed to zero has an undefined sign (the exact result rounds to -0)")
+        }
         _ => None,
     }
 }
@@ -126,15 +130,23 @@ fn compare(name: &str, item: &str, arity: usize, outs: usize, call: &str) -> Vec
             }
         }
     }
-    eprintln!("{}: {} cases, {} within MSL's ulp bound of Metal's value, {} deliberate", name, cs.len(), tally.0, tally.1);
+    eprintln!(
+        "{}: {} cases, {} within MSL's ulp bound of Metal's value, {} deliberate",
+        name,
+        cs.len(),
+        tally.0,
+        tally.1
+    );
     differences
 }
 
 #[test]
 fn library_matches_metal_special_values() {
-    let one = ["exp", "exp2", "exp10", "log", "log2", "log10", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "asin", "acos",
-               "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "sqrt", "rsqrt", "ceil", "floor", "trunc", "rint",
-               "round", "fract", "saturate", "sign"];
+    let one = [
+        "exp", "exp2", "exp10", "log", "log2", "log10", "sin", "cos", "tan", "sinpi", "cospi", "tanpi", "asin", "acos",
+        "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "sqrt", "rsqrt", "ceil", "floor", "trunc", "rint",
+        "round", "fract", "saturate", "sign",
+    ];
     let two = ["atan2", "pow", "powr", "fmod", "fmax", "fmin", "nextafter", "step"];
     let three = ["fma", "fmax3", "fmin3", "fmedian3", "clamp", "mix", "smoothstep"];
     let mut all = Vec::new();
@@ -166,7 +178,12 @@ fn library_matches_metal_special_values() {
         1,
         "nm_t_out[i] = nm_f32_ldexp({a}, bitcast<i32>(nm_f32_to_i32(nm_t_in1[i])));",
     ));
-    for (n, item) in [("to_int", "nm_f32_to_i32"), ("to_uint", "nm_f32_to_u32"), ("to_short", "nm_f32_to_i16"), ("to_half", "nm_f32_to_f16")] {
+    for (n, item) in [
+        ("to_int", "nm_f32_to_i32"),
+        ("to_uint", "nm_f32_to_u32"),
+        ("to_short", "nm_f32_to_i16"),
+        ("to_half", "nm_f32_to_f16"),
+    ] {
         all.extend(compare(n, item, 1, 1, &format!("nm_t_out[i] = {}({{a}});", item)));
     }
     assert!(all.is_empty(), "{} unexplained differences from Metal:\n{}", all.len(), all.join("\n"));

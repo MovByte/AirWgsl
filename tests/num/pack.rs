@@ -1,11 +1,11 @@
 //! Pack and unpack (MSL 6.15, conversion rules 8.7.1 and 8.7.7) and the integer edges, lowered and run on the GPU:
 //! against exact references written here, and against what Metal returned (tests/num/data/metal-pack.txt).
 
-use crate::gpu::{kernel_source, par_range, Kernel, MAX_ITEMS};
+use crate::gpu::{Kernel, MAX_ITEMS, kernel_source, par_range};
 use crate::inputs::Rng;
 use crate::reference as r;
 use airwgsl::api::HostCaps;
-use airwgsl::num::{lower, FastMath, Op, Operand, Rounding, Scalar, Target, Ty};
+use airwgsl::num::{FastMath, Op, Operand, Rounding, Scalar, Target, Ty, lower};
 use std::collections::BTreeMap;
 
 const DATA: &str = include_str!("data/metal-pack.txt");
@@ -20,11 +20,16 @@ fn kernel(name: &str, tys: &[Ty], ret: Ty, stride: u32) -> Kernel {
     let mut base = 0;
     for t in tys {
         let w = |k: u32| format!("nm_t_in0[i * {}u + {}u]", stride, base + k);
-        exprs.push(if t.lanes == 1 { w(0) } else { format!("{}({})", t.carrier(), (0..t.lanes).map(w).collect::<Vec<_>>().join(", ")) });
+        exprs.push(if t.lanes == 1 {
+            w(0)
+        } else {
+            format!("{}({})", t.carrier(), (0..t.lanes).map(w).collect::<Vec<_>>().join(", "))
+        });
         base += t.lanes;
     }
     let ops: Vec<Operand> = exprs.iter().zip(tys).map(|(e, t)| Operand { expr: e, ty: *t, constant: None }).collect();
-    let l = lower(Op::Call(name), &ops, Some(ret), FastMath::NONE, Target { rounding: &soft, host: &caps }, "v").unwrap();
+    let l =
+        lower(Op::Call(name), &ops, Some(ret), FastMath::NONE, Target { rounding: &soft, host: &caps }, "v").unwrap();
     let v = l.value.unwrap();
     let mut body = l.stmts.join("\n");
     for k in 0..ret.lanes {
@@ -61,7 +66,8 @@ fn unorm_code(x: u32, maxv: u32) -> u32 {
     if f >= 1.0 {
         return maxv;
     }
-    let (m, e) = if x >> 23 == 0 { (x as u128, -149) } else { ((x & 0x7f_ffff | 0x80_0000) as u128, (x >> 23) as i32 - 150) };
+    let (m, e) =
+        if x >> 23 == 0 { (x as u128, -149) } else { ((x & 0x7f_ffff | 0x80_0000) as u128, (x >> 23) as i32 - 150) };
     // x * maxv = m * maxv / 2^-e, below 2^-60 when -e >= 100 (m * maxv < 2^40).
     if -e >= 100 {
         return 0;
@@ -245,7 +251,13 @@ fn srgb_conversions() {
     par_range(xs.len(), |js| {
         for j in js {
             let x = r::f(xs[j]);
-            let c = if x.is_nan() || x <= 0.0 { 0.0 } else if x > 1.0 { 1.0 } else { srgb(x as f64) };
+            let c = if x.is_nan() || x <= 0.0 {
+                0.0
+            } else if x > 1.0 {
+                1.0
+            } else {
+                srgb(x as f64)
+            };
             let v = 255.0 * c + 0.5;
             let code = got[j][0] & 0xff;
             let alpha = got[j][0] >> 24;
@@ -340,7 +352,13 @@ fn pack_and_unpack_match_metal() {
                 let srgb = |x: f64| if x < 0.0031308 { 12.92 * x } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
                 let ok = (0..3).all(|k| {
                     let x = r::f(c.ins[k]) as f64;
-                    let cl = if x.is_nan() || x <= 0.0 { 0.0 } else if x > 1.0 { 1.0 } else { srgb(x) };
+                    let cl = if x.is_nan() || x <= 0.0 {
+                        0.0
+                    } else if x > 1.0 {
+                        1.0
+                    } else {
+                        srgb(x)
+                    };
                     (255.0 * cl - ((c.outs[0] >> (8 * k)) & 0xff) as f64).abs() < 1.0
                 }) && c.outs[0] >> 24 == g[0] >> 24;
                 if ok {
@@ -348,7 +366,13 @@ fn pack_and_unpack_match_metal() {
                     continue;
                 }
             }
-            differ.push(format!("{} {:08x?}: Metal {:08x}, library {:08x}", mname, &c.ins[..n as usize], c.outs[0], g[0]));
+            differ.push(format!(
+                "{} {:08x?}: Metal {:08x}, library {:08x}",
+                mname,
+                &c.ins[..n as usize],
+                c.outs[0],
+                g[0]
+            ));
         }
         caps.insert(mname, (cases.len(), within));
         assert!(differ.is_empty(), "{}", differ[..differ.len().min(10)].join("\n"));
@@ -374,7 +398,8 @@ fn pack_and_unpack_match_metal() {
         let et = if half { Scalar::F16 } else { Scalar::F32 };
         let pt = if air.contains("565") { Scalar::I16 } else { Scalar::I32 };
         let k = kernel(air, &[Ty::scalar(pt)], Ty::vector(et, n), 1);
-        let inputs: Vec<u32> = cases.iter().map(|c| if pt == Scalar::I16 { c.ins[0] & 0xffff } else { c.ins[0] }).collect();
+        let inputs: Vec<u32> =
+            cases.iter().map(|c| if pt == Scalar::I16 { c.ins[0] & 0xffff } else { c.ins[0] }).collect();
         let got = run(&k, &inputs, 1, n as usize);
         let mut within = 0;
         let mut differ = Vec::new();
@@ -400,7 +425,10 @@ fn pack_and_unpack_match_metal() {
                 if (val(m) - val(o)).abs() <= 1.5 * ulp {
                     within += 1;
                 } else {
-                    differ.push(format!("{} {:08x} component {}: Metal {:08x}, library {:08x}", mname, c.ins[0], comp, m, o));
+                    differ.push(format!(
+                        "{} {:08x} component {}: Metal {:08x}, library {:08x}",
+                        mname, c.ins[0], comp, m, o
+                    ));
                 }
             }
         }
@@ -408,7 +436,10 @@ fn pack_and_unpack_match_metal() {
         assert!(differ.is_empty(), "{}", differ[..differ.len().min(10)].join("\n"));
     }
     for (k, (n, d)) in caps {
-        eprintln!("{}: {} cases match Metal ({} explained differences: Metal's own rounding within MSL's bound, or its 565 product rounding)", k, n, d);
+        eprintln!(
+            "{}: {} cases match Metal ({} explained differences: Metal's own rounding within MSL's bound, or its 565 product rounding)",
+            k, n, d
+        );
     }
 }
 

@@ -5,11 +5,11 @@
 //! and limits the result needs, or a [`Refusal`].
 
 pub mod api;
-pub mod num;
 pub mod bitcode;
 pub mod bitstream;
 pub mod ir;
 pub mod mtlb;
+pub mod num;
 
 pub use api::*;
 pub use bitcode::parse_bitcode;

@@ -4,10 +4,8 @@
 // The refusal is the compiler's only failure value (api::compile) and is returned by value throughout.
 #![allow(clippy::result_large_err)]
 
-use super::rows::{row_of, Decision, ROUNDING_ONLY};
-use super::{
-    Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Rule, Scalar, Store, Target, Ty,
-};
+use super::rows::{Decision, ROUNDING_ONLY, row_of};
+use super::{Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Rule, Scalar, Store, Target, Ty};
 use crate::api::{HostRequirements, Refusal, RefusalKind};
 use crate::num::prelude::Prelude;
 use std::collections::BTreeSet;
@@ -42,7 +40,13 @@ fn exact() -> Rule {
 
 impl Ctx<'_> {
     fn refuse(&self, kind: RefusalKind, reason: impl Into<String>, reference: Option<&str>) -> Refusal {
-        Refusal { kind, construct: self.construct.clone(), location: None, reason: reason.into(), reference: reference.map(String::from) }
+        Refusal {
+            kind,
+            construct: self.construct.clone(),
+            location: None,
+            reason: reason.into(),
+            reference: reference.map(String::from),
+        }
     }
 
     fn malformed(&self, what: impl Into<String>) -> Refusal {
@@ -58,7 +62,9 @@ impl Ctx<'_> {
     }
 
     fn need(&mut self, item: &str) -> R<()> {
-        self.prelude.require(item).map_err(|e| self.refuse(RefusalKind::NotImplemented, format!("library defect: {}", e.0), None))
+        self.prelude
+            .require(item)
+            .map_err(|e| self.refuse(RefusalKind::NotImplemented, format!("library defect: {}", e.0), None))
     }
 
     fn uses_f16(&mut self) {
@@ -69,7 +75,14 @@ impl Ctx<'_> {
 
 /// Lower one operation. Operand expressions may be any WGSL expressions in their carriers; each is evaluated once,
 /// bound to a `let` named `{tmp}_{n}`. `ret` is the result type (`None` for a call without one).
-pub fn lower(op: Op, args: &[Operand], ret: Option<Ty>, flags: FastMath, target: Target, tmp: &str) -> Result<Lowered, Refusal> {
+pub fn lower(
+    op: Op,
+    args: &[Operand],
+    ret: Option<Ty>,
+    flags: FastMath,
+    target: Target,
+    tmp: &str,
+) -> Result<Lowered, Refusal> {
     let construct = match op {
         Op::Call(name) => name.to_string(),
         Op::Inst(i) => format!("{:?}", i).to_lowercase(),
@@ -109,7 +122,11 @@ fn lane(v: &str, ty: Ty, i: u32) -> String {
 
 /// Build a value of `ty` from one expression per lane.
 fn build(ty: Ty, lanes: Vec<String>) -> String {
-    if ty.lanes == 1 { lanes.into_iter().next().unwrap_or_default() } else { format!("{}({})", ty.carrier(), lanes.join(", ")) }
+    if ty.lanes == 1 {
+        lanes.into_iter().next().unwrap_or_default()
+    } else {
+        format!("{}({})", ty.carrier(), lanes.join(", "))
+    }
 }
 
 /// Apply `f` lane by lane; scalar operands are broadcast to every lane.
@@ -144,7 +161,8 @@ enum FloatImpl {
 
 /// The numerics.toml decision for a floating-point operation and how it is carried out.
 fn decide(c: &Ctx, row: &'static str, scalar: Scalar, fast: bool) -> R<(Rule, bool)> {
-    let r = row_of(row).ok_or_else(|| c.refuse(RefusalKind::NotImplemented, format!("no numerics.toml row {}", row), None))?;
+    let r = row_of(row)
+        .ok_or_else(|| c.refuse(RefusalKind::NotImplemented, format!("no numerics.toml row {}", row), None))?;
     let (column, d) = match (scalar, fast) {
         (Scalar::F32, true) => (Column::FastF32, r.fast_f32),
         (Scalar::F32, false) => (Column::PreciseF32, r.precise_f32),
@@ -166,7 +184,9 @@ fn decide(c: &Ctx, row: &'static str, scalar: Scalar, fast: bool) -> R<(Rule, bo
             }
             Ok((Rule { row: Some(r.id), column, how: How::SoftFloat }, false))
         }
-        Decision::Refusal => Err(c.refuse(RefusalKind::NoExactLowering, format!("numerics.toml row {} refuses it", r.id), None)),
+        Decision::Refusal => {
+            Err(c.refuse(RefusalKind::NoExactLowering, format!("numerics.toml row {} refuses it", r.id), None))
+        }
     }
 }
 
@@ -223,8 +243,11 @@ fn float_op(c: &mut Ctx, ty: Ty, ops: &[(&str, Ty)], imp: FloatImpl, int_ops: &[
         exprs.push(match &imp {
             FloatImpl::Lib(f) => {
                 c.need(f)?;
-                let args: Vec<String> =
-                    l.iter().enumerate().map(|(k, v)| if int_ops.contains(&k) { format!("bitcast<i32>({})", v) } else { v.clone() }).collect();
+                let args: Vec<String> = l
+                    .iter()
+                    .enumerate()
+                    .map(|(k, v)| if int_ops.contains(&k) { format!("bitcast<i32>({})", v) } else { v.clone() })
+                    .collect();
                 format!("{}({})", f, args.join(", "))
             }
             FloatImpl::Native(p) => native_lane(c, ty.scalar, p, &l, int_ops)?,
@@ -333,7 +356,11 @@ fn lower_math(c: &mut Ctx, f: &MathFn, fast_name: bool, b: &[String], tys: &[Ty]
     let ops: Vec<(&str, Ty)> = b.iter().map(String::as_str).zip(tys.iter().copied()).collect();
     let int_ops: Vec<usize> = f.int_op.into_iter().collect();
     let pattern = if rule.how == How::NativeRne { rne_native(f.stem).unwrap_or(f.native) } else { f.native };
-    let imp = if native && !pattern.is_empty() { FloatImpl::Native(pattern) } else { FloatImpl::Lib(lib_name(f.stem, ty.scalar)) };
+    let imp = if native && !pattern.is_empty() {
+        FloatImpl::Native(pattern)
+    } else {
+        FloatImpl::Lib(lib_name(f.stem, ty.scalar))
+    };
     let rule = if native && pattern.is_empty() { Rule { how: How::Exact, ..rule } } else { rule };
     Ok(out(float_op(c, ty, &ops, imp, &int_ops)?, rule))
 }
@@ -440,7 +467,11 @@ fn lower_arith(c: &mut Ctx, i: Inst, b: &[String], tys: &[Ty], args: &[Operand],
 }
 
 fn fcmp_lane(s: Scalar, p: FPred, a: &str, b: &str) -> String {
-    let (a, b) = if s == Scalar::F16 { (format!("nm_f16_to_f32({})", a), format!("nm_f16_to_f32({})", b)) } else { (a.into(), b.into()) };
+    let (a, b) = if s == Scalar::F16 {
+        (format!("nm_f16_to_f32({})", a), format!("nm_f16_to_f32({})", b))
+    } else {
+        (a.into(), b.into())
+    };
     let oeq = format!("nm_f32_oeq({}, {})", a, b);
     let olt = format!("nm_f32_olt({}, {})", a, b);
     let ogt = format!("nm_f32_olt({}, {})", b, a);
@@ -467,7 +498,15 @@ fn fcmp_lane(s: Scalar, p: FPred, a: &str, b: &str) -> String {
     }
 }
 
-fn lower_inst(c: &mut Ctx, i: Inst, b: &[String], tys: &[Ty], args: &[Operand], ret: Option<Ty>, flags: FastMath) -> R<Out> {
+fn lower_inst(
+    c: &mut Ctx,
+    i: Inst,
+    b: &[String],
+    tys: &[Ty],
+    args: &[Operand],
+    ret: Option<Ty>,
+    flags: FastMath,
+) -> R<Out> {
     match i {
         Inst::FAdd | Inst::FSub | Inst::FMul | Inst::FDiv | Inst::FRem => lower_arith(c, i, b, tys, args, flags),
         Inst::FNeg => {
@@ -662,7 +701,11 @@ fn int_lane(c: &mut Ctx, f: &str, sg: Option<bool>, s: Scalar, a: &[String]) -> 
     let wide = s == Scalar::I64;
     let call = |c: &mut Ctx, name: String, args: &[&str]| -> R<String> {
         c.need(&name)?;
-        Ok(if wide { format!("{}({})", name, args.join(", ")) } else { format!("{}({}, {}u)", name, args.join(", "), n) })
+        Ok(if wide {
+            format!("{}({})", name, args.join(", "))
+        } else {
+            format!("{}({}, {}u)", name, args.join(", "), n)
+        })
     };
     let pre = if wide { "nm_i64_" } else { "nm_int_" };
     let a: Vec<&str> = a.iter().map(String::as_str).collect();
@@ -767,7 +810,8 @@ fn lower_int(c: &mut Ctx, f: &str, sg: Option<bool>, arity: usize, b: &[String],
     let lanes = ty.lanes;
     let mut exprs = Vec::new();
     for i in 0..lanes {
-        let mut a: Vec<String> = (0..data_ops).map(|k| lane(&b[k], tys[k], if tys[k].lanes == 1 { 0 } else { i })).collect();
+        let mut a: Vec<String> =
+            (0..data_ops).map(|k| lane(&b[k], tys[k], if tys[k].lanes == 1 { 0 } else { i })).collect();
         if matches!(f, "extract_bits" | "insert_bits") {
             for k in data_ops..arity {
                 let t = tys[k];
@@ -939,7 +983,8 @@ fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], flags: FastMath
     let float_math = |c: &mut Ctx, stem: &str| -> R<Out> {
         let f = MATH.iter().find(|f| f.stem == stem).ok_or_else(|| not_numeric(c))?;
         // llvm intrinsics have no fast_ name: the flags decide.
-        let pseudo = MathFn { stem: f.stem, row: f.row, arity: f.arity, int_op: f.int_op, native: f.native, has_fast: false };
+        let pseudo =
+            MathFn { stem: f.stem, row: f.row, arity: f.arity, int_op: f.int_op, native: f.native, has_fast: false };
         lower_math(c, &pseudo, false, b, tys, if fast { FastMath::FAST } else { FastMath::NONE })
     };
     if ty.scalar.is_float() {
@@ -949,8 +994,14 @@ fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], flags: FastMath
                 Ok(out(per_lane(ty, &[(&b[0], ty)], |a| format!("({} & {})", a[0], m)), exact()))
             }
             "copysign" => {
-                let (m, s) = if ty.scalar == Scalar::F32 { ("0x7fffffffu", "0x80000000u") } else { ("0x7fffu", "0x8000u") };
-                Ok(out(per_lane(ty, &[(&b[0], ty), (&b[1], tys[1])], |a| format!("(({} & {}) | ({} & {}))", a[0], m, a[1], s)), exact()))
+                let (m, s) =
+                    if ty.scalar == Scalar::F32 { ("0x7fffffffu", "0x80000000u") } else { ("0x7fffu", "0x8000u") };
+                Ok(out(
+                    per_lane(ty, &[(&b[0], ty), (&b[1], tys[1])], |a| {
+                        format!("(({} & {}) | ({} & {}))", a[0], m, a[1], s)
+                    }),
+                    exact(),
+                ))
             }
             "sqrt" | "exp2" | "fma" | "floor" | "ceil" | "trunc" | "rint" | "round" | "sin" | "cos" | "exp" | "log"
             | "log2" | "log10" | "pow" => float_math(c, &name),
@@ -980,14 +1031,23 @@ fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], flags: FastMath
         "bswap" if n == 16 || n == 32 || n == 64 => {
             let f = if n == 64 { "nm_i64_bswap" } else { "nm_int_bswap" };
             c.need(f)?;
-            Ok(out(per_lane(ty, &[(&b[0], ty)], |a| if n == 64 { format!("{}({})", f, a[0]) } else { format!("{}({}, {}u)", f, a[0], n) }), exact()))
+            Ok(out(
+                per_lane(ty, &[(&b[0], ty)], |a| {
+                    if n == 64 { format!("{}({})", f, a[0]) } else { format!("{}({}, {}u)", f, a[0], n) }
+                }),
+                exact(),
+            ))
         }
         "fshl" | "fshr" if b.len() == 3 => {
             let f = format!("nm_{}_{}", if n == 64 { "i64" } else { "int" }, name);
             c.need(&f)?;
             let ops = [(b[0].as_str(), ty), (b[1].as_str(), tys[1]), (b[2].as_str(), tys[2])];
             let e = per_lane(ty, &ops, |a| {
-                if n == 64 { format!("{}({}, {}, {})", f, a[0], a[1], a[2]) } else { format!("{}({}, {}, {}, {}u)", f, a[0], a[1], a[2], n) }
+                if n == 64 {
+                    format!("{}({}, {}, {})", f, a[0], a[1], a[2])
+                } else {
+                    format!("{}({}, {}, {}, {}u)", f, a[0], a[1], a[2], n)
+                }
             });
             Ok(out(e, exact()))
         }
@@ -1036,14 +1096,22 @@ fn lower_pack(c: &mut Ctx, pack: bool, parts: &[&str], b: &[String], tys: &[Ty],
         // at the target's language version that produces them.
         return Err(c.refuse(
             RefusalKind::NotImplemented,
-            format!("{} {} has no MSL function at the target's language version", if pack { "pack" } else { "unpack" }, fmt_parts.join(".")),
+            format!(
+                "{} {} has no MSL function at the target's language version",
+                if pack { "pack" } else { "unpack" },
+                fmt_parts.join(".")
+            ),
             Some("MSL 6.15"),
         ));
     };
     let vty = parse_suffix(suffix).unwrap_or(Ty::scalar(Scalar::F32));
     if !vty.scalar.is_float() || vty.lanes as usize != fmt.comps.len() {
         // The front end's grammar admits any float type here; MSL's functions take one vector size per format.
-        return Err(c.malformed(format!("the packed format takes {} float components, not {}", fmt.comps.len(), suffix)));
+        return Err(c.malformed(format!(
+            "the packed format takes {} float components, not {}",
+            fmt.comps.len(),
+            suffix
+        )));
     }
     let half = vty.scalar == Scalar::F16;
     if pack {

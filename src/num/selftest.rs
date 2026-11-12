@@ -117,7 +117,12 @@ pub fn cases() -> Vec<Case> {
         }
     }
     // Carries into the exponent and cancellation.
-    for (a, b) in [(0x3fff_ffffu32, 0x3400_0000u32), (0x3f7f_ffff, 0x3380_0000), (0x3f80_0000, 0xbf7f_ffff), (0x4b7f_ffff, 0x3f00_0000)] {
+    for (a, b) in [
+        (0x3fff_ffffu32, 0x3400_0000u32),
+        (0x3f7f_ffff, 0x3380_0000),
+        (0x3f80_0000, 0xbf7f_ffff),
+        (0x4b7f_ffff, 0x3f00_0000),
+    ] {
         push(ProbeOp::Add, a, b, 0);
         push(ProbeOp::Sub, a, b ^ 0x8000_0000, 0);
         push(ProbeOp::Add, a ^ 0x8000_0000, b ^ 0x8000_0000, 0);
@@ -197,7 +202,7 @@ pub fn probe_wgsl() -> String {
      \x20   }\n\
      \x20   nm_st_out[i] = bitcast<u32>(r);\n\
      }\n"
-        .to_string()
+    .to_string()
 }
 
 /// The probe input for `cases`: four words per case.

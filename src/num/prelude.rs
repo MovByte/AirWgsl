@@ -128,7 +128,12 @@ impl Library {
                     Some(&d) => {
                         deps.insert(d);
                     }
-                    None => return Err(LibraryError(format!("{} names {}, which the library does not define", item.name, id))),
+                    None => {
+                        return Err(LibraryError(format!(
+                            "{} names {}, which the library does not define",
+                            item.name, id
+                        )));
+                    }
                 }
             }
             item.deps = deps.into_iter().collect();

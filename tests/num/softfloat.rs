@@ -1,7 +1,7 @@
 //! The binary32 and binary16 soft-float library against the CPU, bit for bit (NaN payloads included).
 
-use crate::gpu::{kernel_source, par_range, Gpu, Kernel, MAX_ITEMS};
-use crate::inputs::{f32_any, f32_near, Rng, SPECIAL_F16};
+use crate::gpu::{Gpu, Kernel, MAX_ITEMS, kernel_source, par_range};
+use crate::inputs::{Rng, SPECIAL_F16, f32_any, f32_near};
 use crate::{prelude, reference as r};
 use std::sync::Mutex;
 
@@ -34,7 +34,15 @@ impl Mismatches {
 
 /// Every u32 input of a one-operand operation, generated on the GPU: `expr` reads the operand as `a`; the output has
 /// `stride` words per input (`out` names them `nm_t_out[i * stride + k]`).
-fn sweep_u32(what: &str, items: &[&str], body: &str, stride: u32, first: u64, count: u64, want: impl Fn(u32) -> Vec<u32> + Sync) {
+fn sweep_u32(
+    what: &str,
+    items: &[&str],
+    body: &str,
+    stride: u32,
+    first: u64,
+    count: u64,
+    want: impl Fn(u32) -> Vec<u32> + Sync,
+) {
     let src = kernel_source(false, &prelude(items), "", &format!("let a = nm_t_p.y + i;\n{}", body));
     let k = Kernel::new(&src, stride);
     let m = Mutex::new(Mismatches::default());
@@ -152,7 +160,9 @@ macro_rules! binary_f32 {
     ($quick:ident, $long:ident, $what:literal, $item:literal, $reference:path) => {
         #[test]
         fn $quick() {
-            run_lists($what, &[$item], concat!($item, "({a}, {b})"), &operands(1, QUICK, 2), |x| $reference(x[0], x[1]));
+            run_lists($what, &[$item], concat!($item, "({a}, {b})"), &operands(1, QUICK, 2), |x| {
+                $reference(x[0], x[1])
+            });
         }
 
         #[test]
@@ -172,13 +182,17 @@ binary_f32!(f32_fmin, f32_fmin_long, "binary32 fmin", "nm_f32_fmin", r::fmin);
 
 #[test]
 fn f32_fma() {
-    run_lists("binary32 fma", &["nm_f32_fma"], "nm_f32_fma({a}, {b}, {c})", &operands(3, QUICK, 3), |x| r::fma(x[0], x[1], x[2]));
+    run_lists("binary32 fma", &["nm_f32_fma"], "nm_f32_fma({a}, {b}, {c})", &operands(3, QUICK, 3), |x| {
+        r::fma(x[0], x[1], x[2])
+    });
 }
 
 #[test]
 #[ignore = "long: run with --ignored"]
 fn f32_fma_long() {
-    run_lists("binary32 fma", &["nm_f32_fma"], "nm_f32_fma({a}, {b}, {c})", &operands(4, LONG, 3), |x| r::fma(x[0], x[1], x[2]));
+    run_lists("binary32 fma", &["nm_f32_fma"], "nm_f32_fma({a}, {b}, {c})", &operands(4, LONG, 3), |x| {
+        r::fma(x[0], x[1], x[2])
+    });
 }
 
 #[test]
@@ -221,7 +235,9 @@ macro_rules! exhaustive_f32 {
         #[test]
         #[ignore = "exhaustive: run with --ignored"]
         fn $name() {
-            sweep_u32($what, &[$item], concat!("nm_t_out[i] = ", $item, "(a);"), 1, 0, 1 << 32, |a| vec![$reference(a)]);
+            sweep_u32($what, &[$item], concat!("nm_t_out[i] = ", $item, "(a);"), 1, 0, 1 << 32, |a| {
+                vec![$reference(a)]
+            });
         }
     };
 }
@@ -293,12 +309,18 @@ fn int64_to_float() {
     }
     let ops = [lo, hi];
     let v = |x: &[u32]| x[0] as u64 | (x[1] as u64) << 32;
-    run_lists("u64 to binary32", &["nm_f32_from_u64"], "nm_f32_from_u64(vec2<u32>({a}, {b}))", &ops, |x| (v(x) as f32).to_bits());
+    run_lists("u64 to binary32", &["nm_f32_from_u64"], "nm_f32_from_u64(vec2<u32>({a}, {b}))", &ops, |x| {
+        (v(x) as f32).to_bits()
+    });
     run_lists("i64 to binary32", &["nm_f32_from_i64"], "nm_f32_from_i64(vec2<u32>({a}, {b}))", &ops, |x| {
         (v(x) as i64 as f32).to_bits()
     });
-    run_lists("u64 to binary16", &["nm_f16_from_u64"], "nm_f16_from_u64(vec2<u32>({a}, {b}))", &ops, |x| r::u64_to_f16(v(x)) as u32);
-    run_lists("i64 to binary16", &["nm_f16_from_i64"], "nm_f16_from_i64(vec2<u32>({a}, {b}))", &ops, |x| r::i64_to_f16(v(x)) as u32);
+    run_lists("u64 to binary16", &["nm_f16_from_u64"], "nm_f16_from_u64(vec2<u32>({a}, {b}))", &ops, |x| {
+        r::u64_to_f16(v(x)) as u32
+    });
+    run_lists("i64 to binary16", &["nm_f16_from_i64"], "nm_f16_from_i64(vec2<u32>({a}, {b}))", &ops, |x| {
+        r::i64_to_f16(v(x)) as u32
+    });
 }
 
 /// Every binary16 input of the one-operand operations.
@@ -307,7 +329,9 @@ fn f16_unary_all() {
     sweep_u32("binary16 to binary32", &["nm_f16_to_f32"], "nm_t_out[i] = nm_f16_to_f32(a);", 1, 0, 1 << 16, |a| {
         vec![r::f16_to_f32(a as u16)]
     });
-    sweep_u32("binary16 sqrt", &["nm_f16_sqrt"], "nm_t_out[i] = nm_f16_sqrt(a);", 1, 0, 1 << 16, |a| vec![r::h_sqrt(a as u16) as u32]);
+    sweep_u32("binary16 sqrt", &["nm_f16_sqrt"], "nm_t_out[i] = nm_f16_sqrt(a);", 1, 0, 1 << 16, |a| {
+        vec![r::h_sqrt(a as u16) as u32]
+    });
     sweep_u32("binary16 rsqrt", &["nm_f16_rsqrt"], "nm_t_out[i] = nm_f16_rsqrt(a);", 1, 0, 1 << 16, |a| {
         // rsqrt rounded once to binary16: from the exact binary32 square root of the widened value, the correctly
         // rounded reciprocal square root is found by exact comparison against neighbouring binary16 midpoints.
@@ -383,16 +407,28 @@ fn f16_binary_sample() {
     let mut b = Vec::new();
     for _ in 0..QUICK {
         let pick = |rng: &mut Rng| {
-            if rng.below(8) == 0 { SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32 } else { rng.below(1 << 16) }
+            if rng.below(8) == 0 {
+                SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32
+            } else {
+                rng.below(1 << 16)
+            }
         };
         a.push(pick(&mut rng));
         b.push(pick(&mut rng));
     }
     let ops = [a, b];
-    run_lists("binary16 add", &["nm_f16_add"], "nm_f16_add({a}, {b})", &ops, |x| r::h_add(x[0] as u16, x[1] as u16) as u32);
-    run_lists("binary16 sub", &["nm_f16_sub"], "nm_f16_sub({a}, {b})", &ops, |x| r::h_sub(x[0] as u16, x[1] as u16) as u32);
-    run_lists("binary16 mul", &["nm_f16_mul"], "nm_f16_mul({a}, {b})", &ops, |x| r::h_mul(x[0] as u16, x[1] as u16) as u32);
-    run_lists("binary16 div", &["nm_f16_div"], "nm_f16_div({a}, {b})", &ops, |x| r::h_div(x[0] as u16, x[1] as u16) as u32);
+    run_lists("binary16 add", &["nm_f16_add"], "nm_f16_add({a}, {b})", &ops, |x| {
+        r::h_add(x[0] as u16, x[1] as u16) as u32
+    });
+    run_lists("binary16 sub", &["nm_f16_sub"], "nm_f16_sub({a}, {b})", &ops, |x| {
+        r::h_sub(x[0] as u16, x[1] as u16) as u32
+    });
+    run_lists("binary16 mul", &["nm_f16_mul"], "nm_f16_mul({a}, {b})", &ops, |x| {
+        r::h_mul(x[0] as u16, x[1] as u16) as u32
+    });
+    run_lists("binary16 div", &["nm_f16_div"], "nm_f16_div({a}, {b})", &ops, |x| {
+        r::h_div(x[0] as u16, x[1] as u16) as u32
+    });
 }
 
 #[test]
@@ -402,7 +438,11 @@ fn f16_fma_sample() {
     let mut v = vec![Vec::new(), Vec::new(), Vec::new()];
     for _ in 0..n {
         for k in v.iter_mut() {
-            k.push(if rng.below(8) == 0 { SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32 } else { rng.below(1 << 16) });
+            k.push(if rng.below(8) == 0 {
+                SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32
+            } else {
+                rng.below(1 << 16)
+            });
         }
     }
     run_lists("binary16 fma", &["nm_f16_fma"], "nm_f16_fma({a}, {b}, {c})", &v, |x| {

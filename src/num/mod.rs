@@ -106,7 +106,11 @@ impl Ty {
 
     /// The type as AIR spells it in a function name: `f32`, `v4f32`.
     pub fn suffix(&self) -> String {
-        if self.lanes == 1 { self.scalar.suffix().to_string() } else { format!("v{}{}", self.lanes, self.scalar.suffix()) }
+        if self.lanes == 1 {
+            self.scalar.suffix().to_string()
+        } else {
+            format!("v{}{}", self.lanes, self.scalar.suffix())
+        }
     }
 
     /// Whether the vector form is a WGSL `vecN` (otherwise an `array`).

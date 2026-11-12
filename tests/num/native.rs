@@ -2,12 +2,12 @@
 //! whose accuracy WGSL bounds at least as tightly as MSL; the host's measured error must be within MSL's bound
 //! (MSL Table 8.2). A host outside it is a host bug, and the row would move to the polyfill on that host.
 
-use crate::gpu::{kernel_source, Gpu, Kernel, MAX_ITEMS};
+use crate::gpu::{Gpu, Kernel, MAX_ITEMS, kernel_source};
 use crate::inputs::Rng;
 use crate::math::ulp32;
 use crate::reference as r;
 use airwgsl::api::HostCaps;
-use airwgsl::num::{lower, FastMath, How, Inst, Op, Operand, Rounding, Scalar, Target, Ty};
+use airwgsl::num::{FastMath, How, Inst, Op, Operand, Rounding, Scalar, Target, Ty, lower};
 
 fn native_kernel(name: &str, arity: usize) -> Kernel {
     native_op(Op::Call(name), arity)
@@ -86,11 +86,18 @@ fn native_rows_meet_msl_fast_bounds_on_this_host() {
         ("air.fast_fabs.f32", |x| x.abs()),
     ] {
         let got = native_kernel(name, 1).run(&[&a], [0, 0, 0], n as u32);
-        let bad = a.iter().zip(&got).filter(|(x, g)| f(r::f(**x)).to_bits() != **g && !(f(r::f(**x)) == 0.0 && r::f(**g) == 0.0)).count();
+        let bad = a
+            .iter()
+            .zip(&got)
+            .filter(|(x, g)| f(r::f(**x)).to_bits() != **g && !(f(r::f(**x)) == 0.0 && r::f(**g) == 0.0))
+            .count();
         report.push((name, bad as f64, 0.0));
     }
     let b: Vec<u32> = log_uniform(&mut rng, n, -30, 40, true);
-    for (name, f) in [("air.fast_fmax.f32", (|x: f32, y: f32| x.max(y)) as fn(f32, f32) -> f32), ("air.fast_fmin.f32", |x, y| x.min(y))] {
+    for (name, f) in [
+        ("air.fast_fmax.f32", (|x: f32, y: f32| x.max(y)) as fn(f32, f32) -> f32),
+        ("air.fast_fmin.f32", |x, y| x.min(y)),
+    ] {
         let got = native_kernel(name, 2).run(&[&a, &b], [0, 0, 0], n as u32);
         let bad = a.iter().zip(&b).zip(&got).filter(|((x, y), g)| f(r::f(**x), r::f(**y)).to_bits() != **g).count();
         report.push((name, bad as f64, 0.0));

@@ -2,8 +2,8 @@
 //! from the CPU's floor and subtraction, mix and smoothstep from MSL's formula in the CPU's binary32 arithmetic, and
 //! the selections from MSL's definitions.
 
-use crate::gpu::{kernel_source, par_range, Kernel, MAX_ITEMS};
-use crate::inputs::{f32_any, f32_near, Rng, SPECIAL_F16, SPECIAL_F32};
+use crate::gpu::{Kernel, MAX_ITEMS, kernel_source, par_range};
+use crate::inputs::{Rng, SPECIAL_F16, SPECIAL_F32, f32_any, f32_near};
 use crate::prelude;
 use crate::reference as r;
 
@@ -228,7 +228,11 @@ fn binary16_forms() {
     let mut b = Vec::new();
     for _ in 0..(1 << 20) {
         let pick = |rng: &mut Rng| {
-            if rng.below(8) == 0 { SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32 } else { rng.below(1 << 16) }
+            if rng.below(8) == 0 {
+                SPECIAL_F16[rng.below(SPECIAL_F16.len() as u32) as usize] as u32
+            } else {
+                rng.below(1 << 16)
+            }
         };
         a.push(pick(&mut rng));
         b.push(pick(&mut rng));

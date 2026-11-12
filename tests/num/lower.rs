@@ -3,11 +3,13 @@
 //! defines (integer functions, conversions and comparisons against references written here from MSL Table 6.2, MSL
 //! 2.23 and 8.6, and IEEE comparison semantics).
 
-use crate::gpu::{par_range, Gpu, Kernel, MAX_WORDS};
-use crate::inputs::{f32_any, Rng, SPECIAL_F32};
+use crate::gpu::{Gpu, Kernel, MAX_WORDS, par_range};
+use crate::inputs::{Rng, SPECIAL_F32, f32_any};
 use crate::reference as r;
 use airwgsl::api::{HostCaps, RefusalKind};
-use airwgsl::num::{lower, selftest, Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Scalar, Target, Ty};
+use airwgsl::num::{
+    Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Scalar, Target, Ty, lower, selftest,
+};
 use std::collections::BTreeMap;
 
 fn host(f16: bool) -> HostCaps {
@@ -30,7 +32,11 @@ fn load(t: Ty, base: u32) -> String {
         Scalar::I64 => format!("vec2<u32>({}, {})", w(2 * j), w(2 * j + 1)),
         _ => w(j),
     };
-    if t.lanes == 1 { elem(0) } else { format!("{}({})", t.carrier(), (0..t.lanes).map(elem).collect::<Vec<_>>().join(", ")) }
+    if t.lanes == 1 {
+        elem(0)
+    } else {
+        format!("{}({})", t.carrier(), (0..t.lanes).map(elem).collect::<Vec<_>>().join(", "))
+    }
 }
 
 /// Statements storing a carrier value of `t` to `nm_t_out` at the item's words.
@@ -53,7 +59,14 @@ fn store(t: Ty, v: &str) -> String {
 
 /// Lower `op` over operands of `tys` and run it on the GPU for every item of `inputs` (each the operands' words,
 /// concatenated). Returns the result words per item.
-fn run_lowered(op: Op, tys: &[Ty], ret: Ty, flags: FastMath, rounding: &Rounding, inputs: &[Vec<u32>]) -> (Lowered, Vec<Vec<u32>>) {
+fn run_lowered(
+    op: Op,
+    tys: &[Ty],
+    ret: Ty,
+    flags: FastMath,
+    rounding: &Rounding,
+    inputs: &[Vec<u32>],
+) -> (Lowered, Vec<Vec<u32>>) {
     run_lowered_on(&host(Gpu::get().has_f16), op, tys, ret, flags, rounding, inputs)
 }
 
@@ -73,7 +86,8 @@ fn run_lowered_on(
         exprs.push(load(*t, base));
         base += words(*t);
     }
-    let operands: Vec<Operand> = exprs.iter().zip(tys).map(|(e, t)| Operand { expr: e, ty: *t, constant: None }).collect();
+    let operands: Vec<Operand> =
+        exprs.iter().zip(tys).map(|(e, t)| Operand { expr: e, ty: *t, constant: None }).collect();
     let l = lower(op, &operands, Some(ret), flags, target, "nm_v").unwrap_or_else(|e| panic!("{:?}: {}", op, e));
     let body = format!("{}\n{}", l.stmts.join("\n"), store(ret, l.value.as_deref().unwrap()));
     let enable = l.enables.contains("f16");
@@ -163,12 +177,16 @@ fn signature(name: &str) -> Option<(Vec<Ty>, Ty)> {
         "dfdx" | "dfdy" | "fwidth" => (n(1), last),
         "sincos" => (vec![last, last], last),
         "ldexp" => (vec![last, Ty::vector(Scalar::I32, last.lanes)], last),
-        "atan2" | "fmax" | "fmin" | "fmod" | "pow" | "powr" | "nextafter" | "copysign" | "step" | "fdim" | "divide" => (n(2), last),
+        "atan2" | "fmax" | "fmin" | "fmod" | "pow" | "powr" | "nextafter" | "copysign" | "step" | "fdim" | "divide" => {
+            (n(2), last)
+        }
         "fma" | "fmax3" | "fmin3" | "fmedian3" | "mix" | "smoothstep" => (n(3), last),
         "clamp" if last.scalar.is_float() => (n(3), last),
         "clz" | "ctz" => (vec![last, Ty::scalar(Scalar::I1)], last),
         "popcount" | "reverse_bits" | "abs" => (n(1), last),
-        "rotate" | "abs_diff" | "add_sat" | "sub_sat" | "hadd" | "rhadd" | "mul_hi" | "max" | "min" | "mul24" => (n(2), last),
+        "rotate" | "abs_diff" | "add_sat" | "sub_sat" | "hadd" | "rhadd" | "mul_hi" | "max" | "min" | "mul24" => {
+            (n(2), last)
+        }
         "clamp" | "mad_hi" | "mad_sat" | "max3" | "min3" | "median3" | "mad24" => (n(3), last),
         "extract_bits" => (vec![last, i32t, i32t], last),
         "insert_bits" => (vec![last, last, i32t, i32t], last),
@@ -177,14 +195,16 @@ fn signature(name: &str) -> Option<(Vec<Ty>, Ty)> {
     })
 }
 
-const NUMERIC_FAMILIES: &[&str] = &["math-float", "math-geometric", "integer", "conversion", "relational", "derivative", "pack-unpack"];
+const NUMERIC_FAMILIES: &[&str] =
+    &["math-float", "math-geometric", "integer", "conversion", "relational", "derivative", "pack-unpack"];
 
 /// Every name of the numeric families in tables/intrinsics.toml (or the file NM_INTRINSICS_TOML names), with its
 /// family. The table lists names one per [[name]] row, or, in its grammar form, as [[function]] names followed by
 /// one type token per slot from the slot's [[domain]] (tokens whose element a domain reclassifies into another
 /// family, such as f64, are left out).
 fn numeric_names() -> Vec<(String, String)> {
-    let path = std::env::var("NM_INTRINSICS_TOML").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tables/intrinsics.toml").into());
+    let path = std::env::var("NM_INTRINSICS_TOML")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tables/intrinsics.toml").into());
     let table: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let arr = |k: &str| table.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let s = |v: &toml::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -202,16 +222,27 @@ fn numeric_names() -> Vec<(String, String)> {
         if !NUMERIC_FAMILIES.contains(&fam.as_str()) {
             continue;
         }
-        let slots: Vec<String> = f.get("slots").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let slots: Vec<String> = f
+            .get("slots")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
         let mut names = vec![s(&f, "name")];
         for kind in slots {
             let fam_row = families.iter().find(|x| s(x, "id") == fam);
-            let dom_id = fam_row.and_then(|r| r.get("domains")).and_then(|d| d.get(&kind)).and_then(|v| v.as_str()).map(String::from);
+            let dom_id = fam_row
+                .and_then(|r| r.get("domains"))
+                .and_then(|d| d.get(&kind))
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let dom = domains
                 .iter()
                 .find(|d| match &dom_id {
                     Some(id) => &s(d, "id") == id,
-                    None => d.get("default_for").and_then(|v| v.as_array()).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(kind.as_str()))),
+                    None => d
+                        .get("default_for")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(kind.as_str()))),
                 })
                 .unwrap_or_else(|| panic!("no domain for slot {}", kind));
             let reclassified: Vec<String> = dom
@@ -255,7 +286,8 @@ fn every_numeric_name_lowers_to_valid_wgsl_or_a_refusal() {
         for flags in [FastMath::FAST, FastMath::NONE] {
             let params: Vec<String> = tys.iter().enumerate().map(|(j, t)| format!("p{}: {}", j, t.carrier())).collect();
             let exprs: Vec<String> = (0..tys.len()).map(|j| format!("p{}", j)).collect();
-            let operands: Vec<Operand> = exprs.iter().zip(&tys).map(|(e, t)| Operand { expr: e, ty: *t, constant: None }).collect();
+            let operands: Vec<Operand> =
+                exprs.iter().zip(&tys).map(|(e, t)| Operand { expr: e, ty: *t, constant: None }).collect();
             match lower(Op::Call(name), &operands, Some(ret), flags, Target { rounding: &soft, host: &caps }, "t") {
                 Ok(l) => {
                     prelude.extend(&l.prelude);
@@ -456,7 +488,10 @@ fn items_for(n: u32, arity: usize, lanes: u32, rng: &mut Rng, count: usize) -> V
 #[test]
 fn integer_functions_match_msl_table_6_2() {
     let mut rng = Rng::new(31);
-    for f in ["abs", "abs_diff", "add_sat", "sub_sat", "hadd", "rhadd", "mul_hi", "mad_hi", "mad_sat", "max", "min", "max3", "min3", "median3", "clamp"] {
+    for f in [
+        "abs", "abs_diff", "add_sat", "sub_sat", "hadd", "rhadd", "mul_hi", "mad_hi", "mad_sat", "max", "min", "max3",
+        "min3", "median3", "clamp",
+    ] {
         let arity = match f {
             "abs" => 1,
             "mad_hi" | "mad_sat" | "max3" | "min3" | "median3" | "clamp" => 3,
@@ -487,10 +522,13 @@ fn bit_functions_match_msl_table_6_2() {
         let flag = Ty::scalar(Scalar::I1);
         let m = |v: u64| if n == 64 { v } else { v & ((1u64 << n) - 1) };
         // clz and ctz: the bit count for a zero operand (MSL Table 6.2).
-        let items: Vec<Vec<u32>> = items_for(n, 1, 2, &mut rng, 1 << 14).into_iter().map(|mut w| {
-            w.push(0);
-            w
-        }).collect();
+        let items: Vec<Vec<u32>> = items_for(n, 1, 2, &mut rng, 1 << 14)
+            .into_iter()
+            .map(|mut w| {
+                w.push(0);
+                w
+            })
+            .collect();
         run_int(&format!("air.clz.{}", ty.suffix()), &[ty, flag], ty, items.clone(), |w| {
             decode(w, 1, 2, n).iter().flat_map(|l| to_words((m(l[0]).leading_zeros() - (64 - n)) as u64, n)).collect()
         });
@@ -543,7 +581,11 @@ fn bit_functions_match_msl_table_6_2() {
                             0
                         } else {
                             let f = (v >> off) & if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
-                            if signed && f >> (bits - 1) & 1 == 1 { m(f | !(if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 })) } else { f }
+                            if signed && f >> (bits - 1) & 1 == 1 {
+                                m(f | !(if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 }))
+                            } else {
+                                f
+                            }
                         };
                         to_words(r, n)
                     })
@@ -595,7 +637,9 @@ fn convert_ref(dk: char, d: Scalar, sk: char, s: Scalar, w: &[u32]) -> Vec<u32> 
         return w.to_vec();
     }
     match (dk, d) {
-        (_, Scalar::I1) => vec![if sk == 'f' { (float(w) != 0.0 || float(w).is_nan()) as u32 } else { (as_int(w) != 0) as u32 }],
+        (_, Scalar::I1) => {
+            vec![if sk == 'f' { (float(w) != 0.0 || float(w).is_nan()) as u32 } else { (as_int(w) != 0) as u32 }]
+        }
         ('f', Scalar::F32) => {
             if sk == 'f' {
                 vec![float(w).to_bits()]
@@ -609,7 +653,8 @@ fn convert_ref(dk: char, d: Scalar, sk: char, s: Scalar, w: &[u32]) -> Vec<u32> 
             if sk == 'f' {
                 vec![r::f32_to_f16(float(w).to_bits()) as u32]
             } else if s == Scalar::I64 {
-                vec![if sk == 's' { r::i64_to_f16(as_int(w) as i64 as u64) } else { r::u64_to_f16(as_int(w) as u64) } as u32]
+                vec![if sk == 's' { r::i64_to_f16(as_int(w) as i64 as u64) } else { r::u64_to_f16(as_int(w) as u64) }
+                    as u32]
             } else if sk == 's' {
                 vec![r::i32_to_f16(as_int(w) as i32 as u32) as u32]
             } else {
@@ -637,8 +682,19 @@ fn convert_ref(dk: char, d: Scalar, sk: char, s: Scalar, w: &[u32]) -> Vec<u32> 
 #[test]
 fn conversions_follow_msl_static_cast() {
     let mut rng = Rng::new(33);
-    let types = [(Scalar::F32, 'f'), (Scalar::F16, 'f'), (Scalar::I1, 'u'), (Scalar::I8, 's'), (Scalar::I8, 'u'), (Scalar::I16, 's'),
-                 (Scalar::I16, 'u'), (Scalar::I32, 's'), (Scalar::I32, 'u'), (Scalar::I64, 's'), (Scalar::I64, 'u')];
+    let types = [
+        (Scalar::F32, 'f'),
+        (Scalar::F16, 'f'),
+        (Scalar::I1, 'u'),
+        (Scalar::I8, 's'),
+        (Scalar::I8, 'u'),
+        (Scalar::I16, 's'),
+        (Scalar::I16, 'u'),
+        (Scalar::I32, 's'),
+        (Scalar::I32, 'u'),
+        (Scalar::I64, 's'),
+        (Scalar::I64, 'u'),
+    ];
     for &(d, dk) in &types {
         for &(s, sk) in &types {
             let lanes = 2;
@@ -648,13 +704,19 @@ fn conversions_follow_msl_static_cast() {
                 .map(|k| {
                     (0..lanes)
                         .flat_map(|_| {
-                            if s == Scalar::F32 && k % 4 == 0 { vec![SPECIAL_F32[rng.below(SPECIAL_F32.len() as u32) as usize]] } else { value_of(s, &mut rng) }
+                            if s == Scalar::F32 && k % 4 == 0 {
+                                vec![SPECIAL_F32[rng.below(SPECIAL_F32.len() as u32) as usize]]
+                            } else {
+                                value_of(s, &mut rng)
+                            }
                         })
                         .collect()
                 })
                 .collect();
             let sw = if s == Scalar::I64 { 2 } else { 1 };
-            run_int(&name, &[st], dt, items, |w| (0..lanes as usize).flat_map(|l| convert_ref(dk, d, sk, s, &w[l * sw..(l + 1) * sw])).collect());
+            run_int(&name, &[st], dt, items, |w| {
+                (0..lanes as usize).flat_map(|l| convert_ref(dk, d, sk, s, &w[l * sw..(l + 1) * sw])).collect()
+            });
         }
     }
 }
@@ -690,9 +752,18 @@ fn comparisons_are_ieee() {
             .collect();
         for (p, f) in preds {
             let soft = Rounding::SoftFloat;
-            let (_, got) = run_lowered(Op::Inst(Inst::FCmp(p)), &[ty, ty], Ty::vector(Scalar::I1, 2), FastMath::NONE, &soft, &items);
+            let (_, got) = run_lowered(
+                Op::Inst(Inst::FCmp(p)),
+                &[ty, ty],
+                Ty::vector(Scalar::I1, 2),
+                FastMath::NONE,
+                &soft,
+                &items,
+            );
             let val = |w: u32| if s == Scalar::F16 { r::f(r::f16_to_f32(w as u16)) } else { r::f(w) };
-            check(&format!("fcmp {:?} {:?}", p, s), &items, &got, |w| vec![f(val(w[0]), val(w[2])) as u32, f(val(w[1]), val(w[3])) as u32]);
+            check(&format!("fcmp {:?} {:?}", p, s), &items, &got, |w| {
+                vec![f(val(w[0]), val(w[2])) as u32, f(val(w[1]), val(w[3])) as u32]
+            });
         }
     }
 }
@@ -711,13 +782,19 @@ fn policies_compute_correctly_on_this_device() {
     let mut rng = Rng::new(35);
     let ty = Ty::vector(Scalar::F32, 4);
     let items: Vec<Vec<u32>> = (0..1 << 16)
-        .map(|_| (0..12).map(|_| loop {
-            let v = f32_any(&mut rng);
-            // Fast math: NaN and infinity operands are undefined (MSL 8.1).
-            if r::f(v).is_finite() {
-                break v;
-            }
-        }).collect())
+        .map(|_| {
+            (0..12)
+                .map(|_| {
+                    loop {
+                        let v = f32_any(&mut rng);
+                        // Fast math: NaN and infinity operands are undefined (MSL 8.1).
+                        if r::f(v).is_finite() {
+                            break v;
+                        }
+                    }
+                })
+                .collect()
+        })
         .collect();
     let cases = selftest::cases();
     let want: Vec<u32> = cases.iter().map(|c| c.want).collect();
@@ -769,12 +846,27 @@ fn policies_compute_correctly_on_this_device() {
                             }
                             allowed.extend(flush(&b, f(&b)));
                         }
-                        assert!(label == "native" && allowed.contains(&g[lane]), "{} {:?}: {:08x?} got {:08x} want {:08x}", label, op, a, g[lane], w);
+                        assert!(
+                            label == "native" && allowed.contains(&g[lane]),
+                            "{} {:?}: {:08x?} got {:08x} want {:08x}",
+                            label,
+                            op,
+                            a,
+                            g[lane],
+                            w
+                        );
                         flushed += 1;
                     }
                 }
             }
-            eprintln!("{} {:?} ({:?}): {} lanes, {} differ only by flushing subnormals", label, op, l.rule.how, items.len() * 4, flushed);
+            eprintln!(
+                "{} {:?} ({:?}): {} lanes, {} differ only by flushing subnormals",
+                label,
+                op,
+                l.rule.how,
+                items.len() * 4,
+                flushed
+            );
         }
     }
 }
@@ -803,14 +895,31 @@ fn half_lowering_on_this_device() {
                     let w = f(a, b) as u32;
                     let nan = |h: u32| h & 0x7fff > 0x7c00;
                     let special = |h: u16| h & 0x7c00 == 0x7c00;
-                    if flags.finite_only() && (special(a) || special(b) || special(w as u16) || (w & 0x7c00 == 0 && w & 0x3ff != 0)) {
+                    if flags.finite_only()
+                        && (special(a) || special(b) || special(w as u16) || (w & 0x7c00 == 0 && w & 0x3ff != 0))
+                    {
                         // Fast math: NaN and infinity undefined, subnormals may be flushed.
                         continue;
                     }
-                    assert!(g[lane] == w || nan(g[lane]) && nan(w), "{:?} {:?}: {:04x} {:04x} got {:04x} want {:04x}", flags, op, a, b, g[lane], w);
+                    assert!(
+                        g[lane] == w || nan(g[lane]) && nan(w),
+                        "{:?} {:?}: {:04x} {:04x} got {:04x} want {:04x}",
+                        flags,
+                        op,
+                        a,
+                        b,
+                        g[lane],
+                        w
+                    );
                 }
             }
-            eprintln!("binary16 {:?} with {}: {:?}, {} lanes", op, if flags.finite_only() { "fast flags" } else { "no flags" }, l.rule.how, items.len() * 2);
+            eprintln!(
+                "binary16 {:?} with {}: {:?}, {} lanes",
+                op,
+                if flags.finite_only() { "fast flags" } else { "no flags" },
+                l.rule.how,
+                items.len() * 2
+            );
         }
     }
 }
@@ -886,8 +995,23 @@ fn vector_sincos_returns_sines_and_stores_cosines() {
     let ty = Ty::vector(Scalar::F32, 3);
     let caps = host(true);
     let soft = Rounding::SoftFloat;
-    let ops = [Operand { expr: "vec3<u32>(nm_t_in0[3u * i], nm_t_in0[3u * i + 1u], nm_t_in0[3u * i + 2u])", ty, constant: None }, Operand { expr: "0u", ty, constant: None }];
-    let l = lower(Op::Call("air.sincos.v3f32"), &ops, Some(ty), FastMath::NONE, Target { rounding: &soft, host: &caps }, "v").unwrap();
+    let ops = [
+        Operand {
+            expr: "vec3<u32>(nm_t_in0[3u * i], nm_t_in0[3u * i + 1u], nm_t_in0[3u * i + 2u])",
+            ty,
+            constant: None,
+        },
+        Operand { expr: "0u", ty, constant: None },
+    ];
+    let l = lower(
+        Op::Call("air.sincos.v3f32"),
+        &ops,
+        Some(ty),
+        FastMath::NONE,
+        Target { rounding: &soft, host: &caps },
+        "v",
+    )
+    .unwrap();
     assert_eq!(l.stores.len(), 1);
     let mut p = l.prelude.clone();
     p.require("nm_f32_sin").unwrap();

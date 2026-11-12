@@ -27,6 +27,7 @@ impl Rng {
 }
 
 /// binary32 values that are boundaries of some rule.
+#[rustfmt::skip] // grouped by category, one comment per group
 pub const SPECIAL_F32: &[u32] = &[
     0x0000_0000, 0x8000_0000, // zeros
     0x0000_0001, 0x8000_0001, 0x0000_0002, 0x007f_ffff, 0x807f_ffff, 0x0040_0000, // subnormals

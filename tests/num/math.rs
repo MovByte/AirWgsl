@@ -9,8 +9,8 @@
 //! fast, whose smallest ulp bounds are 2 for log2 and 3 for exp and exp2, and whose absolute bounds for sin, cos,
 //! sinpi, cospi, log and log2 are implied by 1 ulp on their domains).
 
-use crate::gpu::{kernel_source, par_range, Gpu, Kernel, MAX_ITEMS};
-use crate::inputs::{f32_any, Rng, SPECIAL_F32};
+use crate::gpu::{Gpu, Kernel, MAX_ITEMS, kernel_source, par_range};
+use crate::inputs::{Rng, SPECIAL_F32, f32_any};
 use crate::prelude;
 use crate::reference as r;
 use std::sync::Mutex;
@@ -103,7 +103,11 @@ pub struct Fun {
 fn nan_in(a: &[u32]) -> Option<u32> {
     a.iter().position(|&x| is_nan(x)).map(|_| {
         // Two NaN operands: the first signaling NaN, else the first quiet NaN, quieted.
-        a.iter().copied().find(|&x| is_nan(x) && x & 0x0040_0000 == 0).or_else(|| a.iter().copied().find(|&x| is_nan(x))).unwrap()
+        a.iter()
+            .copied()
+            .find(|&x| is_nan(x) && x & 0x0040_0000 == 0)
+            .or_else(|| a.iter().copied().find(|&x| is_nan(x)))
+            .unwrap()
             | 0x0040_0000
     })
 }
@@ -346,10 +350,22 @@ fn sp_powr(a: &[u32]) -> Option<u32> {
     }
     let sy = y >> 31 != 0;
     if ax == 0 {
-        return Some(if ay == 0 { DNAN } else if sy { PINF } else { 0 });
+        return Some(if ay == 0 {
+            DNAN
+        } else if sy {
+            PINF
+        } else {
+            0
+        });
     }
     if ax == PINF {
-        return Some(if ay == 0 { DNAN } else if sy { 0 } else { PINF });
+        return Some(if ay == 0 {
+            DNAN
+        } else if sy {
+            0
+        } else {
+            PINF
+        });
     }
     if x == ONE {
         return Some(if ay == PINF { DNAN } else { ONE });
@@ -547,7 +563,11 @@ fn sweep(fun: &Fun, half: bool, bound: f64) {
         });
         base += n as u64;
     }
-    report(&format!("{} {} (every input)", if half { "binary16" } else { "binary32" }, fun.name), tally.into_inner().unwrap(), bound);
+    report(
+        &format!("{} {} (every input)", if half { "binary16" } else { "binary32" }, fun.name),
+        tally.into_inner().unwrap(),
+        bound,
+    );
 }
 
 fn sample_unary(n: usize, seed: u64) -> Vec<Vec<u32>> {
@@ -615,7 +635,11 @@ fn binary16_binary_functions_sample() {
     let mut b = Vec::new();
     for _ in 0..(1 << 18) {
         a.push(rng.below(1 << 16));
-        b.push(if rng.below(2) == 0 { r::f32_to_f16(((rng.below(16) as i32 - 8) as f32).to_bits()) as u32 } else { rng.below(1 << 16) });
+        b.push(if rng.below(2) == 0 {
+            r::f32_to_f16(((rng.below(16) as i32 - 8) as f32).to_bits()) as u32
+        } else {
+            rng.below(1 << 16)
+        });
     }
     for fun in functions().into_iter().filter(|f| f.arity == 2) {
         run_lists(&fun, true, &[a.clone(), b.clone()], 1.0);

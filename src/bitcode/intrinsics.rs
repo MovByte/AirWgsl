@@ -753,7 +753,8 @@ pub(super) fn upgrade_intrinsics(r: &mut Reader) -> Result<()> {
         let target = match existing {
             Some(e) if r.m.functions[e].ty == fty => e,
             Some(_) => {
-                return r.unsupported(format!("{}: a different function already has its LLVM 21 name {}", name, wanted));
+                return r
+                    .unsupported(format!("{}: a different function already has its LLVM 21 name {}", name, wanted));
             }
             None => {
                 if r.m.globals.iter().any(|g| g.common.name == wanted)

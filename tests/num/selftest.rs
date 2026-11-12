@@ -1,6 +1,6 @@
 //! The rounding self-test run on this machine's WebGPU device, and lowered code under the policy it supports.
 
-use crate::gpu::{bytes_of, Gpu};
+use crate::gpu::{Gpu, bytes_of};
 use airwgsl::num::selftest;
 
 /// Run the probe shader exactly as the executor would: one compute pass over the case buffer.
@@ -60,7 +60,8 @@ fn run_probe(cases: &[selftest::Case]) -> Vec<u32> {
     let slice = rb.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    let v: Vec<u32> = slice.get_mapped_range().chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let v: Vec<u32> =
+        slice.get_mapped_range().chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     rb.unmap();
     v
 }
