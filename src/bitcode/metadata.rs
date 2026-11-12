@@ -229,16 +229,20 @@ impl<'a> Reader<'a> {
             }
         }
         for ops in decl_attachments {
+            // LLVM attaches to global objects and ignores any other value.
             let target = match self.values.get(ops[0] as usize).map(|e| e.slot) {
+                None => return self.malformed("global declaration attachment for an undefined value"),
                 Some(Slot::Global(g @ (GlobalId::Var(_) | GlobalId::Function(_)))) => g,
-                Some(Slot::Global(_)) => continue,
-                _ => return self.malformed("global declaration attachment for a value that is not global"),
+                Some(Slot::Global(GlobalId::IFunc(_))) => {
+                    return self.unsupported("metadata attachments on an ifunc");
+                }
+                Some(_) => continue,
             };
             let pairs = self.attachment_pairs(&ops[1..])?;
             for (kind, md) in pairs {
                 match target {
-                    GlobalId::Var(i) => set_attachment(&mut self.m.globals[i as usize].md, kind, md),
-                    GlobalId::Function(i) => set_attachment(&mut self.m.functions[i as usize].md, kind, md),
+                    GlobalId::Var(i) => add_attachment(&mut self.m.globals[i as usize].md, kind, md),
+                    GlobalId::Function(i) => add_attachment(&mut self.m.functions[i as usize].md, kind, md),
                     _ => unreachable!(),
                 }
             }
@@ -440,7 +444,7 @@ impl<'a> Reader<'a> {
             if ops.len() % 2 == 0 {
                 let pairs = self.attachment_pairs(ops)?;
                 for (kind, md) in pairs {
-                    set_attachment(&mut self.m.functions[f as usize].md, kind, md);
+                    add_attachment(&mut self.m.functions[f as usize].md, kind, md);
                 }
                 continue;
             }
@@ -448,8 +452,18 @@ impl<'a> Reader<'a> {
                 Some(&i) => i,
                 None => return self.malformed("metadata attachment for an undefined instruction"),
             };
-            let pairs = self.attachment_pairs(&ops[1..])?;
-            for (kind, md) in pairs {
+            for pair in ops[1..].chunks(2) {
+                let kind = match self.md.kinds.get(&pair[0]) {
+                    Some(&k) => k,
+                    None => return self.malformed(format!("invalid metadata kind id {}", pair[0])),
+                };
+                let md = self.md_ref(pair[1])?;
+                match self.m.md(md) {
+                    Metadata::Tuple { .. } => {}
+                    // LLVM drops an attachment of a function-local value, and the rest of the record with it.
+                    Metadata::Local { .. } => break,
+                    _ => return self.malformed("metadata attachment is not a node"),
+                }
                 let md = if kind == MD_TBAA { self.upgrade_tbaa(md) } else { md };
                 let inst = &mut self.m.functions[f as usize].insts[inst.0 as usize];
                 if kind == 0 {
@@ -483,6 +497,13 @@ impl<'a> Reader<'a> {
         }
         self.m.intern_md(Metadata::Tuple { distinct: false, ops: vec![Some(md), Some(md), Some(zero_md)] })
     }
+}
+
+/// Adds attachment `kind` to a global object (`GlobalObject::addMetadata`): one kind may be attached more than once,
+/// and the list stays sorted by kind with attachments of one kind in the order they were added.
+pub(crate) fn add_attachment(list: &mut Vec<(u32, MdId)>, kind: u32, md: MdId) {
+    let at = list.partition_point(|e| e.0 <= kind);
+    list.insert(at, (kind, md));
 }
 
 /// Sets attachment `kind` (replacing one of the same kind), keeping the list sorted by kind.

@@ -1,7 +1,6 @@
 //! The module-wide upgrades LLVM 21 applies after reading (`globalCleanup`, `materialize`, `materializeModule` in
 //! `BitcodeReader.cpp`; `AutoUpgrade.cpp`).
 
-use super::metadata::set_attachment;
 use super::{Reader, Result};
 use crate::ir::*;
 
@@ -458,6 +457,5 @@ fn verify_tbaa(r: &mut Reader) -> Result<()> {
             }
         }
     }
-    let _ = set_attachment;
     Ok(())
 }
