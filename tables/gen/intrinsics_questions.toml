@@ -6,7 +6,7 @@ id = "5.1-name-sources"
 plan = "5.1"
 question = "Where do the accepted air.* names come from, and do the two sources agree?"
 status = "resolved"
-answer = "MTLCompiler.framework links libGPUCompiler.dylib, whose implementation libraries hold the front end's AIR name tables; the five images, extracted from the 21H461 cache, contribute 10,427 identifiers (gen/frontend_names.py). The 167 system metallibs (19,556 modules) declare 1,101 air.* functions and use 166 air.* metadata names (gen/survey_corpus.py). They do not coincide: 710 corpus functions are absent from the strings because the front end composes type-suffixed names from stems at run time (air.acos + .f32); the probe measurement shows that composition. The table therefore classifies the union by family patterns over stems and type suffixes, and every corpus metadata name is also in the strings."
+answer = "MTLCompiler.framework links libGPUCompiler.dylib, whose implementation libraries hold the front end's AIR name tables; the five images, extracted from the 21H461 cache, contribute 10,427 identifiers (gen/frontend_names.py). The system corpus, every AIR container the corpus index lists (246 files: 154 metallibs, 62 pipeline-library functions files, 8 Mach-O binary archives, 1 universal file, 6 dyld shared cache files with embedded metallibs, 8 compiler runtime archives, 3 bitcode files and 4 GPU driver runtime tables; 19,270 distinct modules), declares 1,138 air.* functions and uses 168 air.* metadata names (gen/survey_corpus.py). They do not coincide: 734 corpus functions are absent from the strings because the front end composes type-suffixed names from stems at run time (air.acos + .f32); the probe measurement shows that composition. The table therefore classifies the union by family patterns over stems and type suffixes. Every corpus metadata name but air.compile.native_double_disable is also in the strings."
 cite = [
   { measure = "air-probe", case = "math_acos_h", quote = "air.acos.f16" },
 ]
@@ -14,9 +14,9 @@ cite = [
 [[question]]
 id = "5.1-triples"
 plan = "5.1"
-question = "Which target triples and language versions occur in the system metallibs?"
+question = "Which target triples and language versions occur in the system corpus?"
 status = "resolved"
-answer = "air64-apple-ios17.7.0 16,783; ios17.4.0 2,758; ios17.0.0 13; ios15.0.0 1; and one module with triple air64_v26-apple-ios17.0.0, which the plan's survey did not list. Language versions 1.1 to 3.1, and 643 modules without an air.language_version record. Every module disassembles with llvm-dis 21. The [survey] table of this file holds the counts."
+answer = "Of the 19,270 distinct modules: air64-apple-ios17.7.0 17,780; ios17.4.0 1,364; ios17.0.0 13; ios15.0.0 1; ios11.0.0 2; and 110 modules with triple air64_v26-apple-ios17.0.0, which the plan's survey did not list. Language versions 1.1 to 3.1, and 1,377 modules without an air.language_version record (the runtime archives and driver tables among them). Every module disassembles with llvm-dis 21. The [survey] table of this file holds the counts."
 cite = [
   { measure = "air-probe", case = "module-metadata", quote = "air.language_version" },
 ]
@@ -36,9 +36,9 @@ cite = [
 [[question]]
 id = "5.2-double-in-corpus"
 plan = "5.2"
-question = "Does any system metallib compute in double?"
+question = "Does any system module compute in double?"
 status = "resolved"
-answer = "Yes, although MSL does not support double: two modules declare air.floor.f64 and air.fmin.f64 (survey counts in the [[name]] rows). They are refused (family double); if an A10X-selected path reaches them the refusal is LOUD with the module named, and the producing library needs identifying."
+answer = "Yes, although MSL does not support double: three modules declare air.floor.f64 and three air.fmin.f64 (survey counts in the [[name]] rows). They are refused (family double); if an A10X-selected path reaches them the refusal is LOUD with the module named, and the producing library needs identifying."
 cite = [
   { src = "msl", ref = "2.1", quote = "Metal does not support the double, long long, unsigned long long, and long double data types." },
 ]

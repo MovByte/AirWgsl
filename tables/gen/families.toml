@@ -670,7 +670,7 @@ cite = [
 
 [[family]]
 id = "metadata-compile-flags"
-match = ['air\.compile\.(?:denorms_disable|denorms_enable|fast_math_disable|fast_math_enable|framebuffer_fetch_disable|framebuffer_fetch_enable)', 'air\.compile']
+match = ['air\.compile\.(?:denorms_disable|denorms_enable|fast_math_disable|fast_math_enable|framebuffer_fetch_disable|framebuffer_fetch_enable|native_double_disable)', 'air\.compile']
 kind = "metadata"
 msl = "compiler options recorded in the module (1.6)"
 decision = "metadata"

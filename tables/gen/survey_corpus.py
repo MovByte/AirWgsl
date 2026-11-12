@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Survey the AIR modules embedded in a root's metallibs.
+"""Survey every AIR module of the target root, as the system corpus index lists them.
 
-Every `.metallib` under the root is scanned for LLVM bitcode wrapper headers
-(magic 0x0B17C0DE, then version, offset, size and CPU type as little-endian
-u32). Each wrapped module is disassembled with `llvm-dis` and tallied:
-target triples, `!air.language_version` values, declared callee names,
-`air.*` metadata strings and named metadata. The summary is written as JSON
-to the output path; nothing is written under the root.
+The modules come from the index that tools/extract-system-metallibs.py writes for the
+root: every AIR container it decodes (metallibs, metallibs inside Mach-O binary archives
+and universal files, pipeline-library `functions` files, metallibs embedded in the dyld
+shared cache, the compiler's runtime archives and bitcode files, the GPU driver's runtime
+tables). The index directory holds index.tsv (one row per file), modules.tsv (one row per
+entry naming a module) and bitcode/<sha256>.bc (each distinct module). Every module file
+is checked against its SHA-256, disassembled with `llvm-dis` and tallied: target triples,
+`!air.language_version` values, declared callee names, `air.*` metadata strings and named
+metadata. Counts are of distinct modules. The summary is written as JSON to the output
+path; nothing is written under the index directory.
 
-Usage: survey_corpus.py --root ROOT --llvm-dis PATH --out SUMMARY.json [--jobs N]
+Usage: survey_corpus.py --index DIR --llvm-dis PATH --out SUMMARY.json [--jobs N]
 """
 
 import argparse
@@ -18,12 +22,10 @@ import hashlib
 import json
 import os
 import re
-import struct
 import subprocess
 import sys
 
-WRAPPER_MAGIC = 0x0B17C0DE
-BITCODE_MAGIC = b"BC\xc0\xde"
+INDEX_FORMAT = "# airwgsl-system-corpus-index 1"
 
 DECLARE_RE = re.compile(r'^declare\b[^@]*@("(?:[^"\\]|\\.)*"|[-a-zA-Z$._0-9]+)\(', re.M)
 NAMED_MD_RE = re.compile(r"^!(air\.[-a-zA-Z$._0-9]+) = ", re.M)
@@ -33,32 +35,18 @@ LANGVER_RE = re.compile(r"^!air\.language_version = !\{!(\d+)\}", re.M)
 MD_NODE_RE = r'^!{0} = !\{{!"([^"]*)", i32 (\d+), i32 (\d+), i32 (\d+)\}}'
 
 
-def find_metallibs(root):
-    out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
-        for name in sorted(filenames):
-            if name.endswith(".metallib"):
-                path = os.path.join(dirpath, name)
-                if os.path.isfile(path) and not os.path.islink(path):
-                    out.append(path)
-    return out
-
-
-def wrapped_modules(data):
-    """Yield (file offset, module bytes) for every bitcode wrapper in data."""
-    magic = struct.pack("<I", WRAPPER_MAGIC)
-    pos = data.find(magic)
-    while pos >= 0:
-        if pos + 20 <= len(data):
-            _, version, offset, size, _cpu = struct.unpack_from("<5I", data, pos)
-            start = pos + offset
-            end = start + size
-            if version == 0 and offset == 20 and end <= len(data) and data[start:start + 4] == BITCODE_MAGIC:
-                yield pos, data[pos:end]
-                pos = data.find(magic, end)
-                continue
-        pos = data.find(magic, pos + 1)
+def read_tsv(path):
+    """Rows of an index file, whose first line names the index format."""
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        first = f.readline().rstrip("\n")
+        if first != INDEX_FORMAT:
+            raise SystemExit("%s: not a %s file" % (path, INDEX_FORMAT[2:]))
+        for line in f:
+            line = line.rstrip("\n")
+            if line and not line.startswith("#"):
+                rows.append(line.split("\t"))
+    return rows
 
 
 def unquote(name):
@@ -68,7 +56,11 @@ def unquote(name):
 
 
 def survey_module(args):
-    llvm_dis, module = args
+    llvm_dis, path, sha = args
+    with open(path, "rb") as f:
+        module = f.read()
+    if hashlib.sha256(module).hexdigest() != sha:
+        return {"error": "content does not hash to %s" % sha}
     proc = subprocess.run([llvm_dis, "-o", "-", "-"], input=module, capture_output=True)
     if proc.returncode != 0:
         return {"error": proc.stderr.decode("utf-8", "replace")[:400]}
@@ -91,26 +83,30 @@ def survey_module(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--root", required=True)
+    ap.add_argument("--index", required=True, help="output directory of tools/extract-system-metallibs.py")
     ap.add_argument("--llvm-dis", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
 
-    libs = find_metallibs(a.root)
-    files = []
-    jobs = []
-    for path in libs:
-        with open(path, "rb") as f:
-            data = f.read()
-        mods = list(wrapped_modules(data))
-        files.append({
-            "path": os.path.relpath(path, a.root),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "modules": len(mods),
-        })
-        for _, mod in mods:
-            jobs.append((a.llvm_dis, mod))
+    index_path = os.path.join(a.index, "index.tsv")
+    with open(index_path, "rb") as f:
+        index_sha = hashlib.sha256(f.read()).hexdigest()
+    layouts = {row[0]: row[3] for row in read_tsv(index_path)}
+    # A layout names the outer container first: mtlb, lppm, macho, fat, embedded, ar,
+    # bitcode or agx-rtlib.
+    containers = collections.Counter(re.match(r"[a-z-]+", layout).group(0) for layout in layouts.values())
+    entries = read_tsv(os.path.join(a.index, "modules.tsv"))
+    modules = {}
+    for row in entries:
+        path, sha = row[0], row[4]
+        if path not in layouts:
+            raise SystemExit("modules.tsv names %s, which index.tsv does not list" % path)
+        modules.setdefault(sha, set()).add(path)
+    jobs = [(a.llvm_dis, os.path.join(a.index, "bitcode", sha + ".bc"), sha) for sha in sorted(modules)]
+    for _, path, _ in jobs:
+        if not os.path.exists(path):
+            raise SystemExit("module file missing: %s" % path)
 
     triples = collections.Counter()
     langvers = collections.Counter()
@@ -119,9 +115,9 @@ def main():
     md_strings = collections.Counter()
     errors = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as pool:
-        for i, r in enumerate(pool.map(survey_module, jobs, chunksize=16)):
+        for (_, _, sha), r in zip(jobs, pool.map(survey_module, jobs, chunksize=16)):
             if "error" in r:
-                errors.append({"module_index": i, "stderr": r["error"]})
+                errors.append({"module": sha, "stderr": r["error"]})
                 continue
             triples[r["triple"]] += 1
             langvers[r["language_version"]] += 1
@@ -130,10 +126,12 @@ def main():
             md_strings.update(r["md_strings"])
 
     summary = {
-        "metallibs": len(files),
+        "index_sha256": index_sha,
+        "files": len(layouts),
+        "containers": dict(sorted(containers.items())),
+        "module_entries": len(entries),
         "modules": len(jobs),
         "disassembly_failures": errors,
-        "files": files,
         "triples": dict(sorted(triples.items(), key=lambda kv: str(kv[0]))),
         "language_versions": dict(sorted(langvers.items(), key=lambda kv: str(kv[0]))),
         "declared_callees": dict(sorted(declares.items())),
@@ -143,8 +141,8 @@ def main():
     with open(a.out, "w") as f:
         json.dump(summary, f, indent=1, sort_keys=False)
         f.write("\n")
-    print("metallibs=%d modules=%d failures=%d declared=%d" % (
-        len(files), len(jobs), len(errors), len(declares)))
+    print("files=%d modules=%d failures=%d declared=%d" % (
+        len(layouts), len(jobs), len(errors), len(declares)))
     return 1 if errors else 0
 
 
