@@ -122,10 +122,13 @@ def attribute(stderr, ranges, source_name):
 
 
 def reached_intrinsics(ll_text):
-    """{entry function: sorted list of air./llvm. functions it reaches}."""
+    """({function: sorted declared functions it reaches}, sorted names reached from the module's
+    static initializers). Static initializers (section ``air.static_init``) run for the whole
+    module, so what they call belongs to the module rather than to one entry point."""
     calls = {}
     current = None
     declared = set()
+    static_init = set()
     for line in ll_text.splitlines():
         if line.startswith("declare "):
             m = DECLARE.match(line)
@@ -137,6 +140,8 @@ def reached_intrinsics(ll_text):
             current = m.group(2) if m else None
             if current is not None:
                 calls[current] = set()
+                if 'section "air.static_init"' in line:
+                    static_init.add(current)
             continue
         if line.startswith("}"):
             current = None
@@ -160,7 +165,8 @@ def reached_intrinsics(ll_text):
                 elif callee in declared:
                     out.add(callee)
         result[fn] = sorted(out)
-    return result
+    module_level = sorted(set().union(*(result[f] for f in static_init))) if static_init else []
+    return result, module_level
 
 
 INVALID = "\0invalid-output\0"
@@ -277,9 +283,9 @@ def build_one(group, version, flag, out, extra_options):
         if dis.returncode != 0:
             raise RuntimeError(f"{group['name']} {version}: llvm-dis failed: {dis.stderr[:400]}")
         with open(ll_path, encoding="utf-8") as fh:
-            reach = reached_intrinsics(fh.read())
+            reach, module_level = reached_intrinsics(fh.read())
         result["modules"].append({"sha256": sha, "size": len(blob), "path": os.path.relpath(air, out),
-                                  "metallib": packaged})
+                                  "metallib": packaged, "static_init_intrinsics": module_level})
         for v in members:
             status[v] = ("accepted", index, reach.get(f"v{v}", []))
     for v in range(len(group["variants"])):

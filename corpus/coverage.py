@@ -184,6 +184,11 @@ def main():
     statuses = collections.Counter()
     for gname, entry in results["groups"].items():
         for version, res in entry["versions"].items():
+            # Functions called from a module's static initializers belong to the module.
+            for module in res.get("modules", []):
+                for n in module.get("static_init_intrinsics", []):
+                    if n.startswith("air."):
+                        gen_versions[n].add(version)
             for index, rec in res["status"].items():
                 statuses[rec["status"]] += 1
                 if rec["status"] != "accepted":
