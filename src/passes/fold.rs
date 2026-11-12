@@ -202,7 +202,7 @@ fn determined(m: &Module, ty: crate::ir::TypeId, v: &Val, freeze: bool) -> bool 
             Type::Half | Type::BFloat => Some(16),
             Type::Float => Some(32),
             Type::Double => Some(64),
-            Type::Ptr(_) => Some(64),
+            Type::Ptr(a) => crate::ir::layout::DataLayout::parse(&m.datalayout).ok().map(|dl| dl.pointer_spec(*a).bits),
             _ => None,
         }
     };

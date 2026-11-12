@@ -116,7 +116,11 @@ impl Interp<'_> {
                     let w = self.prim_of(&fr, self.type_of(&fr, *i))?.width();
                     idx.push((self.operand(*i)?, w));
                 }
-                self.gep(&fr, *source, &base, &idx, *flags)
+                let asp = match self.prim_of(&fr, self.type_of(&fr, *ptr))? {
+                    Prim::Ptr(a, _) => a,
+                    _ => return Err(unsupported("getelementptr on a non-pointer")),
+                };
+                self.gep(&fr, *source, asp, &base, &idx, *flags)
             }
             ConstExpr::ExtractElement { vec, idx } => {
                 let v = self.operand(*vec)?.lanes();

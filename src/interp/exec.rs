@@ -531,7 +531,11 @@ impl<'a> Interp<'a> {
                     let w = self.prim_of(fr, self.type_of(fr, *i))?.width();
                     idx.push((self.eval(fr, *i)?, w));
                 }
-                self.gep(fr, *source, &base, &idx, *flags)?
+                let asp = match self.prim_of(fr, self.type_of(fr, *ptr))? {
+                    Prim::Ptr(a, _) => a,
+                    _ => return Err(self.unsupported(fr, "getelementptr on a non-pointer")),
+                };
+                self.gep(fr, *source, asp, &base, &idx, *flags)?
             }
             Op::ExtractElement { vec, idx } => {
                 let v = self.eval(fr, *vec)?;
@@ -794,7 +798,16 @@ impl<'a> Interp<'a> {
 
     /// `getelementptr` (LangRef: indices sign-extended or truncated to the index width, scaled by allocation sizes,
     /// added with wrapping; `nusw`/`nuw`/`inbounds` violations give poison).
-    pub fn gep(&mut self, fr: &Frame, source: TypeId, base: &Val, idx: &[(Val, u32)], flags: GepFlags) -> R<Val> {
+    /// `addrspace` is the base pointer's address space, whose index width the offsets wrap at.
+    pub fn gep(
+        &mut self,
+        fr: &Frame,
+        source: TypeId,
+        addrspace: u32,
+        base: &Val,
+        idx: &[(Val, u32)],
+        flags: GepFlags,
+    ) -> R<Val> {
         let lanes = std::iter::once(base)
             .chain(idx.iter().map(|(v, _)| v))
             .filter_map(|v| if let Val::V(l) = v { Some(l.len()) } else { None })
@@ -810,14 +823,14 @@ impl<'a> Interp<'a> {
             None => {
                 let b = pick(base, 0);
                 let ix: Vec<(Scalar, u32)> = idx.iter().map(|(v, w)| (pick(v, 0), *w)).collect();
-                Ok(Val::S(self.gep_scalar(fr, source, &b, &ix, flags)?))
+                Ok(Val::S(self.gep_scalar(fr, source, addrspace, &b, &ix, flags)?))
             }
             Some(n) => {
                 let mut out = Vec::new();
                 for k in 0..n {
                     let b = pick(base, k);
                     let ix: Vec<(Scalar, u32)> = idx.iter().map(|(v, w)| (pick(v, k), *w)).collect();
-                    out.push(self.gep_scalar(fr, source, &b, &ix, flags)?);
+                    out.push(self.gep_scalar(fr, source, addrspace, &b, &ix, flags)?);
                 }
                 Ok(Val::V(out))
             }
@@ -828,6 +841,7 @@ impl<'a> Interp<'a> {
         &mut self,
         fr: &Frame,
         source: TypeId,
+        addrspace: u32,
         base: &Scalar,
         idx: &[(Scalar, u32)],
         flags: GepFlags,
@@ -835,7 +849,7 @@ impl<'a> Interp<'a> {
         if base.poison || idx.iter().any(|(s, _)| s.poison) {
             return Ok(Scalar::POISON);
         }
-        let iw = self.dl.pointer_spec(0).index_bits;
+        let iw = self.dl.pointer_spec(addrspace).index_bits;
         let nusw = flags.0 & (GepFlags::NUSW | GepFlags::INBOUNDS) != 0;
         let nuw = flags.0 & GepFlags::NUW != 0;
         let inbounds = flags.inbounds();
