@@ -22,6 +22,9 @@
 //! undef or poison by a value, and remove undefined behavior, never add any). The corpus check runs each function
 //! before and after on the interpreter with random inputs and compares by refinement ([`crate::interp::compare`]).
 //!
+//! What canonicalization cannot do is a [`Refusal`] whose reason starts with the item of the compiler's tracked
+//! refusal list it falls under ([`Item`]), `[namespace:id]`, and whose kind is that item's.
+//!
 //! # The canonical form
 //!
 //! What [`Canonical`] guarantees to the stages after it (the guarantees marked *checked* are verified before

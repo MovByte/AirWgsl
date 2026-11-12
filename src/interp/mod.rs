@@ -25,7 +25,7 @@
 //! # Calls of declarations
 //!
 //! LLVM intrinsics and the AIR functions with exact definitions (conversions, integer functions, atomics on buffers,
-//! function constant queries) are evaluated by their definitions ([`intrinsics`]). Other declarations depend on
+//! function constant queries) are evaluated by their definitions (module `intrinsics`). Other declarations depend on
 //! [`Options::externals`]:
 //!
 //! - [`Externals::Refuse`]: the call is unsupported. This is the mode for comparisons against real Metal, where every

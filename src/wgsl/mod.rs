@@ -9,7 +9,7 @@
 //! entry point comes typed from the AIR semantic layer ([`crate::air`]) decoding the canonical module, and the
 //! reflection from [`crate::reflect`] with the values canonicalization determined
 //! ([`crate::passes::reflection::canonical_inputs`]: predicate values, binding slots computed from constants, and the
-//! arguments the canonical function does not use). [`check_canonical`] still verifies the form before lowering.
+//! arguments the canonical function does not use). `check_canonical` still verifies the form before lowering.
 //!
 //! # Output
 //!
