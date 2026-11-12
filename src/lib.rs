@@ -15,6 +15,7 @@ pub mod mem;
 pub mod mtlb;
 pub mod num;
 pub mod reflect;
+pub mod sync;
 pub mod wgsl;
 
 pub use api::*;
