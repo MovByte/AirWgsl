@@ -6,7 +6,8 @@
 use super::harness::{air, case_dir, dawn_node, first_difference, run_dawn, run_metal, run_wgpu};
 use airwgsl::api::*;
 use airwgsl::num::Rounding;
-use airwgsl::wgsl::hooks::{CallRule, CallSite, Effect, RuleCx, Rules};
+use airwgsl::wgsl::entry::Record;
+use airwgsl::wgsl::hooks::{CallRule, CallSite, Effect, RuleCx, Rules, StageCx, StageRule};
 use std::sync::Arc;
 
 struct AtomicAdd;
@@ -152,4 +153,71 @@ fn a_rule_binds_a_resource_and_claims_its_argument() {
     assert!(
         group.entries.iter().any(|e| e.source == BindingSource::MetalTexture { stage: MetalStage::Kernel, index: 3 })
     );
+}
+
+/// A stage rule for this test only: a float4 vertex attribute as a native WGSL vertex input.
+struct Float4Attribute;
+
+impl StageRule for Float4Attribute {
+    fn handles_argument(&self, stage: MetalStage, kind: &str) -> bool {
+        stage == MetalStage::Vertex && kind == "air.vertex_input"
+    }
+
+    fn argument(&self, cx: &mut dyn StageCx, arg: u32, record: &Record) -> Result<String, Refusal> {
+        let loc = record.int_after("air.location_index", 0).unwrap();
+        assert_eq!(record.type_name(), Some("float4"));
+        cx.param(format!("@location({}) aw_vi{}: vec4<f32>", loc, arg));
+        Ok(format!("bitcast<vec4<u32>>(aw_vi{})", arg))
+    }
+}
+
+const VERTEX: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct In {
+    float4 p [[attribute(2)]];
+};
+
+vertex float4 vs(In in [[stage_in]]) {
+    return in.p;
+}
+"#;
+
+#[test]
+fn a_stage_rule_lowers_an_argument_record() {
+    let dir = case_dir("hooks-stage");
+    let bc = air(&dir, VERTEX);
+    let m = AirModule {
+        hash: [0; 32],
+        bitcode: Arc::from(&bc[..]),
+        entry: Some(EntryPoint { function: "vs".into(), function_type: 1, constants: Vec::new() }),
+    };
+    let desc = PipelineDesc {
+        kind: PipelineKind::Render(RenderState {
+            vertex_descriptor: None,
+            color_attachments: Vec::new(),
+            depth_attachment_pixel_format: 0,
+            stencil_attachment_pixel_format: 0,
+            raster_sample_count: 1,
+            alpha_to_coverage_enabled: false,
+            alpha_to_one_enabled: false,
+            rasterization_enabled: true,
+            input_primitive_topology: 3,
+            primitive_type: None,
+            tessellation: None,
+            max_vertex_amplification_count: 1,
+        }),
+        bindings: Vec::new(),
+    };
+    let r = compile(std::slice::from_ref(&m), &desc, &HostCaps::default()).unwrap_err();
+    assert!(r.reason.starts_with("[compiler:vertex-input]"), "{}", r);
+    let rules = Rules::new().with_stage(Box::new(Float4Attribute));
+    let c = airwgsl::wgsl::compile_with(&[m], &desc, &HostCaps::default(), &rules, &Rounding::SoftFloat).unwrap();
+    let src = &c.wgsl[0].source;
+    assert!(src.contains("@location(2) aw_vi0: vec4<f32>"), "{}", src);
+    let module = naga::front::wgsl::parse_str(src).unwrap();
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+        .validate(&module)
+        .unwrap();
 }

@@ -56,6 +56,8 @@ pub struct Interface {
     pub enables: Vec<String>,
     /// Fragment functions that must not have side effects for the lowering to be exact (`early_fragment_tests`).
     pub early_fragment_tests: bool,
+    /// WebGPU features stage rules need.
+    pub features: Vec<String>,
 }
 
 fn loc(m: &Module, fi: usize) -> Option<Location> {
@@ -354,6 +356,12 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
         let unused = r.has("air.arg_unused") || !cx.used[i];
         let t = a.ty;
         let bind = |it: &mut Interface, expr: String| it.prologue.push(format!("let {} = {};", name, expr));
+        if let Some(rule) = cx.rules.stage_argument(stage, kind) {
+            let mut scx = StageCtx { cx, it: &mut it, layout };
+            let e = rule.argument(&mut scx, i as u32, r)?;
+            bind(&mut it, e);
+            continue;
+        }
         match kind {
             "air.buffer" => {
                 if unused {
@@ -662,11 +670,11 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
             _ => {}
         }
     }
-    outputs(cx, &mut it)?;
+    outputs(cx, &mut it, layout)?;
     Ok(it)
 }
 
-fn outputs(cx: &Ctx, it: &mut Interface) -> Result<(), Refusal> {
+fn outputs(cx: &Ctx, it: &mut Interface, layout: &mut Layout) -> Result<(), Refusal> {
     let m = cx.m;
     let e = cx.entry;
     let fi = e.function;
@@ -700,6 +708,17 @@ fn outputs(cx: &Ctx, it: &mut Interface) -> Result<(), Refusal> {
         let member = if is_struct { format!("{{}}.m{}", k) } else { "{}".to_string() };
         let field = format!("o{}", k);
         let conv = |c: &str| c.replace("{}", &member);
+        if let Some(rule) = cx.rules.stage_output(e.stage, kind) {
+            let mut scx = StageCtx { cx, it, layout };
+            match rule.output(&mut scx, k, r, *t)? {
+                Some(f) => {
+                    fields.push(f.decl.replace("{name}", &field));
+                    convs.push(Some(conv(&f.value)));
+                }
+                None => convs.push(None),
+            }
+            continue;
+        }
         match kind {
             // MSL 5.2.3.3, Table 5.4 position (float4) and WGSL position output; clip space and the viewport
             // transform agree: MSL 1.7 (NDC (-1,-1) lower left, visible z in [0, 1], viewport origin top-left with
@@ -839,4 +858,64 @@ fn outputs(cx: &Ctx, it: &mut Interface) -> Result<(), Refusal> {
     it.ret_type = Some(name.to_string());
     it.ret_fields = convs;
     Ok(())
+}
+
+/// The stage rules' view of an interface being lowered.
+struct StageCtx<'a, 'b> {
+    cx: &'a Ctx<'b>,
+    it: &'a mut Interface,
+    layout: &'a mut Layout,
+}
+
+impl super::hooks::StageCx for StageCtx<'_, '_> {
+    fn module(&self) -> &Module {
+        self.cx.m
+    }
+
+    fn function(&self) -> usize {
+        self.cx.entry.function
+    }
+
+    fn stage(&self) -> MetalStage {
+        self.cx.entry.stage
+    }
+
+    fn desc(&self) -> &PipelineDesc {
+        self.cx.desc
+    }
+
+    fn param(&mut self, p: String) {
+        self.it.params.push(p);
+    }
+
+    fn uniform(&mut self, value: UniformValue) -> String {
+        self.layout.uniform(self.cx.entry.stage, value)
+    }
+
+    fn resource(
+        &mut self,
+        resource: crate::api::BindingResource,
+        source: crate::api::BindingSource,
+        wgsl_type: &str,
+    ) -> Result<String, Refusal> {
+        let stage = self.cx.entry.stage;
+        let name = Layout::resource_name(stage, &source);
+        self.layout.add_resource(crate::layout::ResourceVar {
+            stage,
+            name: name.clone(),
+            wgsl_type: wgsl_type.to_string(),
+            resource,
+            source,
+            binding: 0,
+        });
+        Ok(name)
+    }
+
+    fn prelude(&mut self, item: &'static str) {
+        self.it.prelude.push(item);
+    }
+
+    fn require_feature(&mut self, feature: &str) {
+        self.it.features.push(feature.to_string());
+    }
 }

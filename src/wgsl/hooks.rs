@@ -9,10 +9,14 @@
 //! model asks every rule which pointer operands a call reads, writes or accesses atomically ([`CallRule::effects`]), so
 //! that a region an atomic rule touches is declared atomic and every other access to it is atomic too (plan 5.8).
 //!
+//! A [`StageRule`] lowers entry-point argument and output records (vertex input, varyings beyond the direct ones,
+//! built-ins that need the executor's help, outputs): the stage interface asks the registered stage rules before its
+//! own direct mappings, so the stage-interface package replaces or extends them without editing them.
+//!
 //! Registration is static: a package adds its rule set to [`registered`]. [`crate::wgsl::compile_with`] takes an
 //! explicit set (tests register their own).
 
-use crate::api::{BindingResource, BindingSource, Refusal};
+use crate::api::{BindingResource, BindingSource, MetalStage, PipelineDesc, Refusal, UniformValue};
 use crate::ir::{InstId, Module, TypeId, Value};
 use crate::mem::access::Ptr;
 use crate::wgsl::entry::Record;
@@ -95,10 +99,74 @@ pub trait CallRule: Send + Sync {
     fn lower(&self, cx: &mut dyn RuleCx, call: &CallSite<'_>) -> Result<Option<String>, Refusal>;
 }
 
+/// What a stage-interface rule can do: declare entry parameters, read executor uniforms, ask for bindings and
+/// library items.
+pub trait StageCx {
+    fn module(&self) -> &Module;
+    /// The entry function.
+    fn function(&self) -> usize;
+    /// The stage being lowered.
+    fn stage(&self) -> MetalStage;
+    /// The pipeline state.
+    fn desc(&self) -> &PipelineDesc;
+    /// An entry parameter (`@builtin(...) name: type`, `@location(n) ... name: type`).
+    fn param(&mut self, p: String);
+    /// The WGSL expression (a `u32`) of a field of the executor's uniform block.
+    fn uniform(&mut self, value: UniformValue) -> String;
+    /// A binding for a resource, as [`RuleCx::resource`].
+    fn resource(
+        &mut self,
+        resource: BindingResource,
+        source: BindingSource,
+        wgsl_type: &str,
+    ) -> Result<String, Refusal>;
+    /// A numerics library item the generated expressions call.
+    fn prelude(&mut self, item: &'static str);
+    /// A WebGPU feature the code needs.
+    fn require_feature(&mut self, feature: &str);
+}
+
+/// How a returned value becomes a stage output.
+pub struct OutputField {
+    /// The output struct member (`@builtin(...) NAME: type` or `@location(n) NAME: type`), with `{name}` where the
+    /// member's name goes.
+    pub decl: String,
+    /// The member's value from the IR value's carrier (`{}`).
+    pub value: String,
+}
+
+/// A rule lowering entry-point argument and output records (the stage-interface lowering).
+pub trait StageRule: Send + Sync {
+    /// Whether the rule lowers argument records of this kind in this stage.
+    fn handles_argument(&self, _stage: MetalStage, _kind: &str) -> bool {
+        false
+    }
+    /// Lower argument `arg` (record `record`): the WGSL expression of its value in its type's carrier.
+    fn argument(&self, _cx: &mut dyn StageCx, _arg: u32, _record: &Record) -> Result<String, Refusal> {
+        unreachable!("argument() of a rule that handles no argument")
+    }
+    /// Whether the rule lowers output records of this kind in this stage.
+    fn handles_output(&self, _stage: MetalStage, _kind: &str) -> bool {
+        false
+    }
+    /// Lower output `index` (record `record`, member type `ty`); `None` when the output is not declared (nothing
+    /// reads it).
+    fn output(
+        &self,
+        _cx: &mut dyn StageCx,
+        _index: usize,
+        _record: &Record,
+        _ty: TypeId,
+    ) -> Result<Option<OutputField>, Refusal> {
+        unreachable!("output() of a rule that handles no output")
+    }
+}
+
 /// A set of rules.
 #[derive(Default)]
 pub struct Rules {
     pub calls: Vec<Box<dyn CallRule>>,
+    pub stage: Vec<Box<dyn StageRule>>,
 }
 
 impl Rules {
@@ -109,6 +177,21 @@ impl Rules {
     pub fn with(mut self, rule: Box<dyn CallRule>) -> Rules {
         self.calls.push(rule);
         self
+    }
+
+    pub fn with_stage(mut self, rule: Box<dyn StageRule>) -> Rules {
+        self.stage.push(rule);
+        self
+    }
+
+    /// The stage rule lowering argument records of `kind`, if one is registered.
+    pub fn stage_argument(&self, stage: MetalStage, kind: &str) -> Option<&dyn StageRule> {
+        self.stage.iter().find(|r| r.handles_argument(stage, kind)).map(|r| r.as_ref())
+    }
+
+    /// The stage rule lowering output records of `kind`, if one is registered.
+    pub fn stage_output(&self, stage: MetalStage, kind: &str) -> Option<&dyn StageRule> {
+        self.stage.iter().find(|r| r.handles_output(stage, kind)).map(|r| r.as_ref())
     }
 
     /// Whether a registered rule lowers uses of arguments of this record kind.

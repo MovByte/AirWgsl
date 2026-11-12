@@ -390,6 +390,7 @@ pub fn lower_stage(
     }
     out.push_str("}\n");
     let mut requirements = e.requirements.clone();
+    requirements.features.extend(iface.features.iter().cloned());
     if stage == MetalStage::Kernel {
         let w = iface.workgroup_size.unwrap();
         let lim = &mut requirements.limits;
