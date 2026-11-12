@@ -930,7 +930,7 @@ impl<'a> FnEmit<'a> {
                 self.numeric(i, num::Op::Inst(num::Inst::FCmp(fpred(*pred))), &[*lhs, *rhs], Some(t), *fm, "fcmp")
             }
             Op::ICmp { pred, lhs, rhs, .. } => {
-                let e = self.icmp(*pred, *lhs, *rhs)?;
+                let e = self.icmp(i, *pred, *lhs, *rhs)?;
                 self.def(i, e)
             }
             Op::Cast { op, value, fmf: fm, .. } => self.cast(i, *op, *value, t, *fm),
@@ -1182,24 +1182,36 @@ impl<'a> FnEmit<'a> {
         if !matches!(bits, 1 | 8 | 16 | 32 | 64) {
             return Err(tracked::refuse("integer-width", format!("i{}", bits), None, "an integer operation"));
         }
-        let (ca, cb) = (self.const_scalar(lhs), self.const_scalar(rhs));
-        if !vector && let (Some(a), Some(b)) = (ca, cb) {
-            return Ok(int_lit(bits, fold(op, bits, a, b).unwrap_or(0)));
-        }
         let ea = self.operand(lhs)?;
         let eb = self.operand(rhs)?;
         let mut lanes = Vec::new();
         for k in 0..n {
+            // Constant lanes are folded, and a constant shift amount or divisor is checked, per lane: WGSL rejects
+            // the constant expressions LLVM leaves poison or undefined.
+            let (ca, cb) = (self.const_lane(lhs, k), self.const_lane(rhs, k));
+            if let (Some(a), Some(b)) = (ca, cb) {
+                lanes.push(int_lit(bits, fold(op, bits, a, b).unwrap_or(0)));
+                continue;
+            }
             let a = Self::lane(&ea, vector, k);
             let b = Self::lane(&eb, vector, k);
-            let cbk = if vector { None } else { cb };
-            lanes.push(self.int_lane(op, bits, &a, &b, cbk)?);
+            lanes.push(self.int_lane(op, bits, &a, &b, cb)?);
         }
         self.build(t, lanes)
     }
 
-    fn const_scalar(&self, v: Value) -> Option<u64> {
-        self.const_int(v)
+    /// Lane `k` of an integer constant (scalar or vector); undef and poison lanes are 0.
+    fn const_lane(&self, v: Value, k: u32) -> Option<u64> {
+        let Value::Const(c) = v else {
+            return None;
+        };
+        match &self.m.constant(c).kind {
+            ConstKind::Int(w) => Some(w[0]),
+            ConstKind::Zero | ConstKind::Undef | ConstKind::Poison => Some(0),
+            ConstKind::DataVector(es) => es.get(k as usize).copied(),
+            ConstKind::Vector(vs) => vs.get(k as usize).and_then(|e| self.const_lane(*e, 0)),
+            _ => None,
+        }
     }
 
     fn int_lane(&mut self, op: BinOp, bits: u32, a: &str, b: &str, cb: Option<u64>) -> R<String> {
@@ -1294,7 +1306,7 @@ impl<'a> FnEmit<'a> {
         })
     }
 
-    fn icmp(&mut self, pred: IntPredicate, lhs: Value, rhs: Value) -> R<String> {
+    fn icmp(&mut self, inst: InstId, pred: IntPredicate, lhs: Value, rhs: Value) -> R<String> {
         let lt = self.value_type(lhs);
         if self.m.types.is_ptr(lt) {
             return self.ptr_cmp(pred, lhs, rhs);
@@ -1327,7 +1339,13 @@ impl<'a> FnEmit<'a> {
             let b = Self::lane(&eb, vector, k);
             lanes.push(self.icmp_lane(pred, bits, &a, &b)?);
         }
-        if vector { Ok(format!("vec{}<bool>({})", n, lanes.join(", "))) } else { Ok(lanes.remove(0)) }
+        if vector {
+            // vecN<bool> for up to 4 lanes, an array beyond (the carrier of <N x i1>).
+            let t = self.f.inst(inst).ty;
+            self.build(t, lanes)
+        } else {
+            Ok(lanes.remove(0))
+        }
     }
 
     fn icmp_lane(&mut self, pred: IntPredicate, bits: u32, a: &str, b: &str) -> R<String> {

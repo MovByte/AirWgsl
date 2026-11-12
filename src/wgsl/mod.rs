@@ -105,7 +105,12 @@ pub fn input(m: &AirModule) -> R<Input> {
 fn check_canonical(m: &Module, fi: usize) -> R<()> {
     let f = &m.functions[fi];
     let loc = || Some(Location { function: f.common.name.clone(), instruction: None });
-    if m.globals.iter().any(|g| g.common.name == "llvm.global_ctors") {
+    // A constructor list with entries runs static initializers before the entry point; an empty one (which the front
+    // end emits for every module of some libraries) does nothing.
+    if m.globals.iter().any(|g| {
+        g.common.name == "llvm.global_ctors"
+            && !matches!(m.types.get(g.value_type), crate::ir::Type::Array { len: 0, .. })
+    }) {
         return Err(tracked::refuse_family("static-init", "llvm.global_ctors", loc()));
     }
     for inst in &f.insts {
