@@ -19,6 +19,7 @@ pub mod mtlb;
 pub mod num;
 pub mod reflect;
 pub mod sync;
+pub mod tex;
 pub mod wgsl;
 
 pub use api::*;

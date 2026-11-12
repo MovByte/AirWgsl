@@ -318,6 +318,126 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.5",
     },
     Item {
+        id: "texture-above-family",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a texture type, texture access or sampler setting the A10X does not support (cube texture arrays, 2D \
+                  multisample arrays, access::read_write, mirrorClampToEdge, border colors), with the device \
+                  profile getter that says so",
+        reference: "WebMetal device profile ipados-17.7.11-21H461-a10x.toml",
+    },
+    Item {
+        id: "texture-min-lod-clamp",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a sample with min_lod_clamp: the A10X reports supportsShaderMinLODClamp = false, what its compiler \
+                  does with the option is not established, and WGSL sampling takes no minimum LOD",
+        reference: "plan 5.7; MSL 6.13",
+    },
+    Item {
+        id: "texture-buffer",
+        owner: Some("S6a"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a texture buffer access: its lowering through the memory model over the bound buffer, with the \
+                  format's unpack, is not implemented",
+        reference: "plan 5.7",
+    },
+    Item {
+        id: "texture-fetch-filtering",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a sample the shader must filter itself (an integer texture, clampToZero, unnormalized coordinates, \
+                  a format stored in another format) with linear filtering, or on a depth or cube texture: Metal \
+                  states no filter-weight precision to reproduce",
+        reference: "plan 5.7; WebMetal formats.toml question 5.7-filter-weight-precision",
+    },
+    Item {
+        id: "texture-depth-lod",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a depth texture sampled at a computed level, with a bias or gradients, or compared at a level \
+                  other than 0: WGSL has no such depth sampling function",
+        reference: "plan 5.7; WGSL 17.7",
+    },
+    Item {
+        id: "texture-binding-conflict",
+        owner: Some("S6a"),
+        kind: RefusalKind::NotImplemented,
+        summary: "one texture or sampler argument used in ways that need different WebGPU bindings of its slot (a \
+                  cube texture sampled and read texel by texel, a sampler used for comparisons and plain sampling)",
+        reference: "plan 5.5",
+    },
+    Item {
+        id: "texture-dynamic-handle",
+        owner: Some("S6a"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a texture or sampler operand that is not one argument or constant sampler: a select or phi of \
+                  handles, an array element, a null texture made in the shader",
+        reference: "plan 5.5, 5.7",
+    },
+    Item {
+        id: "texture-format-shim",
+        owner: Some("S6a"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a write to a bound format whose stored encoding the shader does not reproduce (the XR formats, \
+                  RG11B10Float, RGB10A2Uint)",
+        reference: "plan 6.3",
+    },
+    Item {
+        id: "storage-texture-format",
+        owner: None,
+        kind: RefusalKind::HostUnsupported,
+        summary: "a write to a texture whose stored format the host cannot bind as a write-only storage texture",
+        reference: "WebGPU 26.1",
+    },
+    Item {
+        id: "texture-host-format",
+        owner: None,
+        kind: RefusalKind::HostUnsupported,
+        summary: "a bound texture format that needs a WebGPU feature the host lacks",
+        reference: "WebGPU 26.1",
+    },
+    Item {
+        id: "texture-unfilterable",
+        owner: None,
+        kind: RefusalKind::HostUnsupported,
+        summary: "a linear-filtering sampler paired with a bound texture the host cannot filter",
+        reference: "WebGPU 26.1; plan 5.5",
+    },
+    Item {
+        id: "texture-write-level",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a write-only texture's mipmap levels other than its bound level 0 (a write to another level, its \
+                  level count): a WebGPU storage binding is one level, chosen when the bind group is made",
+        reference: "WebGPU 6.1.3",
+    },
+    Item {
+        id: "texture-write-rounding",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a float value written to a binary16 texture format with the native rounding mode: the hardware's \
+                  native rounding (MSL 1.6.7) is not measured for the A10X",
+        reference: "MSL 1.6.7, 8.7.2",
+    },
+    Item {
+        id: "texture-slot-mismatch",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a bound texture or sampler that does not fit the argument (texture type, texel class, a format the \
+                  A10X does not bind, descriptor values without an enumerator): Metal's validation layer rejects \
+                  the draw, and without it the access is undefined",
+        reference: "MSL 2.9",
+    },
+    Item {
+        id: "texture-call-form",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "a texture function call whose operands are outside the forms the front end writes (a non-constant \
+                  offset or flag, an access code that does not match the argument)",
+        reference: "plan 5.1 stage 4",
+    },
+    Item {
         id: "threadgroup-memory-length",
         owner: None,
         kind: RefusalKind::RejectedByDevice,

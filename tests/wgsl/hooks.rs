@@ -152,7 +152,11 @@ fn a_rule_binds_a_resource_and_claims_its_argument() {
         }),
         bindings: Vec::new(),
     };
-    let r = compile(std::slice::from_ref(&m), &desc, &HostCaps::default()).unwrap_err();
+    // Without a rule that claims texture arguments the argument is refused.
+    let none = Rules::new();
+    let r =
+        airwgsl::wgsl::compile_with(std::slice::from_ref(&m), &desc, &HostCaps::default(), &none, &Rounding::SoftFloat)
+            .unwrap_err();
     assert!(r.reason.starts_with("[compiler:resource-argument]"), "{}", r);
     let rules = Rules::new().with(Box::new(TextureWidth));
     let c = airwgsl::wgsl::compile_with(&[m], &desc, &HostCaps::default(), &rules, &Rounding::SoftFloat).unwrap();
