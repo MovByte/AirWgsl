@@ -18,6 +18,7 @@ pub mod layout;
 pub mod mem;
 pub mod mtlb;
 pub mod num;
+pub mod passes;
 pub mod reflect;
 pub mod stage;
 pub mod sync;
