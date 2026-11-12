@@ -264,3 +264,108 @@ fn wrong_operands_are_refused() {
     records[0][i + 1] = "four";
     assert!(refused(kernel(&records)).reason.contains("i32"));
 }
+
+/// `air.compile.framebuffer_fetch_disable` is the target compiler's record of framebuffer fetch being off; with
+/// `air.compile.framebuffer_fetch_enable` beside it the module states both ways and is refused.
+#[test]
+fn framebuffer_fetch_compile_options() {
+    let with = |keys: &[&str]| {
+        let mut m = valid();
+        let opts: Vec<MdId> = keys.iter().map(|k| m.intern_md(Metadata::String(k.as_bytes().to_vec()))).collect();
+        let recs: Vec<MdId> =
+            opts.into_iter().map(|o| m.intern_md(Metadata::Tuple { distinct: false, ops: vec![Some(o)] })).collect();
+        let i = m.named_metadata.iter().position(|n| n.name == "air.compile_options").unwrap();
+        m.named_metadata[i].ops.extend(recs);
+        m
+    };
+    let a = AirModule::decode(with(&["air.compile.framebuffer_fetch_disable"])).unwrap();
+    assert!(a.compile_options.framebuffer_fetch_disable);
+    assert!(!a.compile_options.framebuffer_fetch_enable);
+    let a = AirModule::decode(with(&["air.compile.framebuffer_fetch_enable"])).unwrap();
+    assert!(a.compile_options.framebuffer_fetch_enable && !a.compile_options.framebuffer_fetch_disable);
+    for both in [
+        ["air.compile.framebuffer_fetch_enable", "air.compile.framebuffer_fetch_disable"],
+        ["air.compile.framebuffer_fetch_disable", "air.compile.framebuffer_fetch_enable"],
+    ] {
+        let r = refused(with(&both));
+        assert!(r.reason.contains("twice or both ways"), "{r}");
+    }
+}
+
+/// `air.rename_qualified_function_signature` wraps a signature node and a name (`AIRenameQualifiedFunctionSignature`),
+/// as the base of a linked-constants signature or nested in another rename.
+#[test]
+fn rename_qualified_function_signatures() {
+    let mut b = B::new();
+    let module = b.rec(&["air.module_signature", "lib"]);
+    let kw = b.s("air.rename_qualified_function_signature");
+    let name = b.s("ns::f(int)");
+    let rename = b.t(vec![kw, module, name]);
+    let kw2 = b.s("air.rename_qualified_function_signature");
+    let name2 = b.s("g");
+    let nested = b.t(vec![kw2, rename, name2]);
+    let lc = b.s("air.linked_constants_signature");
+    let inner = b.t(vec![lc, nested]);
+    let kw3 = b.s("air.rename_qualified_function_signature");
+    let name3 = b.s("h");
+    let outer = b.t(vec![kw3, inner, name3]);
+    let head = b.s("air.linked_constants_signature");
+    let sig = b.t(vec![head, nested, outer]);
+    b.named("air.signature", vec![sig]);
+    let mut m = valid();
+    // Graft the signature built in `b` onto the valid module.
+    let base = m.metadata.len() as u32;
+    for md in &b.m.metadata {
+        let md = match md {
+            Metadata::Tuple { distinct, ops } => Metadata::Tuple {
+                distinct: *distinct,
+                ops: ops.iter().map(|o| o.map(|id| MdId(id.0 + base))).collect(),
+            },
+            other => other.clone(),
+        };
+        m.metadata.push(md);
+    }
+    m.rebuild_md_unique();
+    m.named_metadata.push(NamedMetadata { name: "air.signature".into(), ops: vec![MdId(sig.0 + base)] });
+    let a = AirModule::decode(m).unwrap();
+    let g = desc::SignatureEntry::RenameQualifiedFunction {
+        signature: Box::new(desc::SignatureEntry::RenameQualifiedFunction {
+            signature: Box::new(desc::SignatureEntry::Module("lib".into())),
+            name: "ns::f(int)".into(),
+        }),
+        name: "g".into(),
+    };
+    let h = desc::SignatureEntry::RenameQualifiedFunction {
+        signature: Box::new(desc::SignatureEntry::LinkedConstants(vec![g.clone()])),
+        name: "h".into(),
+    };
+    assert_eq!(a.signatures, vec![vec![g, h]]);
+}
+
+/// A rename whose base is not a signature node, or that lacks its name, is refused.
+#[test]
+fn malformed_rename_signatures_are_refused() {
+    for bad in [&["air.rename_qualified_function_signature", "x"][..], &["air.rename_qualified_function_signature"]] {
+        let mut b = B::new();
+        let rename = b.rec(bad);
+        let head = b.s("air.linked_constants_signature");
+        let sig = b.t(vec![head, rename]);
+        b.named("air.signature", vec![sig]);
+        let mut m = valid();
+        let base = m.metadata.len() as u32;
+        for md in &b.m.metadata {
+            let md = match md {
+                Metadata::Tuple { distinct, ops } => Metadata::Tuple {
+                    distinct: *distinct,
+                    ops: ops.iter().map(|o| o.map(|id| MdId(id.0 + base))).collect(),
+                },
+                other => other.clone(),
+            };
+            m.metadata.push(md);
+        }
+        m.rebuild_md_unique();
+        m.named_metadata.push(NamedMetadata { name: "air.signature".into(), ops: vec![MdId(sig.0 + base)] });
+        let r = refused(m);
+        assert!(r.to_string().contains("air.rename_qualified_function_signature"), "{r}");
+    }
+}

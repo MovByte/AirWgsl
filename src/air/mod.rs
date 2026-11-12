@@ -84,6 +84,11 @@ pub struct CompileOptions {
     pub denorms_disable: bool,
     /// `air.compile.framebuffer_fetch_enable`.
     pub framebuffer_fetch_enable: bool,
+    /// `air.compile.framebuffer_fetch_disable`: the target's compiler writes it in place of
+    /// `air.compile.framebuffer_fetch_enable` when framebuffer fetch is off (libGPUCompilerImpl 21H461,
+    /// `AIRMetadataPrunerPass::run` at 0x1c4396ce4 and `upgradeAIRModule` at 0x1c43b2808 choose between the two
+    /// strings).
+    pub framebuffer_fetch_disable: bool,
     /// `air.compile.native_double_disable`.
     pub native_double_disable: bool,
 }
@@ -1177,7 +1182,10 @@ impl AirModule {
                             "air.compile.fast_math_disable" => o.fast_math.replace(false).is_some(),
                             "air.compile.denorms_disable" => std::mem::replace(&mut o.denorms_disable, true),
                             "air.compile.framebuffer_fetch_enable" => {
-                                std::mem::replace(&mut o.framebuffer_fetch_enable, true)
+                                std::mem::replace(&mut o.framebuffer_fetch_enable, true) || o.framebuffer_fetch_disable
+                            }
+                            "air.compile.framebuffer_fetch_disable" => {
+                                std::mem::replace(&mut o.framebuffer_fetch_disable, true) || o.framebuffer_fetch_enable
                             }
                             "air.compile.native_double_disable" => {
                                 std::mem::replace(&mut o.native_double_disable, true)

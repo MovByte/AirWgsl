@@ -138,6 +138,7 @@ pub const KEYS: &[&str] = &[
     "air.stitching_argument",
     "air.linked_constants_signature",
     "air.module_signature",
+    "air.rename_qualified_function_signature",
     "air.ci_builtin",
     "air.ci_texture",
     "air.ci_sampler",
@@ -372,42 +373,88 @@ pub(super) fn stitching_info(
 // Linked constants ----------------------------------------------------------------------------------------------------
 
 /// One entry of `air.linked_constants_signature`.
+///
+/// The target's compiler (libGPUCompilerImpl, 21H461) has three kinds of signature node, the subclasses of
+/// `llvm::air::AISignatureNode`, whose `classof` (0x1c436269c) accepts a tuple whose first operand is the string
+/// `air.module_signature`, `air.linked_constants_signature` or `air.rename_qualified_function_signature`:
+/// `AIModuleSignature::getImpl` (0x1c4362848) builds `!{!"air.module_signature", !"name"}`,
+/// `AILinkedConstantsSignature::getImpl` (0x1c4362a80) `!{!"air.linked_constants_signature", <base signature node>,
+/// <linked constants>...}` and `AIRenameQualifiedFunctionSignature::getImpl` (0x1c4362958)
+/// `!{!"air.rename_qualified_function_signature", <base signature node>, !"name"}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignatureEntry {
     /// `air.module_signature`.
     Module(String),
+    /// `air.rename_qualified_function_signature`: the base signature node and the name.
+    RenameQualifiedFunction { signature: Box<SignatureEntry>, name: String },
+    /// A nested `air.linked_constants_signature` node: its entries.
+    LinkedConstants(Vec<SignatureEntry>),
     /// A linked constant: its value (a constant of the module), name and index.
     Constant { ty: TypeId, value: Value, name: String, index: u32 },
 }
 
+/// How deep signature nodes nest within one another before the module is refused.
+const SIGNATURE_DEPTH: u32 = 32;
+
 pub(super) fn signature(m: &Module, id: MdId) -> Result<Vec<SignatureEntry>, Refusal> {
     let mut c = Cursor::node(m, id, format!("air.signature !{}", id.0), None)?;
     expect_head(&mut c, "air.linked_constants_signature")?;
+    linked_constants(m, &mut c, 0)
+}
+
+/// The entries after the head of an `air.linked_constants_signature` node.
+fn linked_constants(m: &Module, c: &mut Cursor<'_>, depth: u32) -> Result<Vec<SignatureEntry>, Refusal> {
     let mut out = Vec::new();
     while !c.at_end() {
         let e = c.node_id("air.linked_constants_signature")?;
-        let mut r = Cursor::node(m, e, format!("air.linked_constants_signature entry !{}", e.0), None)?;
-        if head(&r) == Some(b"air.module_signature") {
-            r.advance();
-            out.push(SignatureEntry::Module(r.string("air.module_signature")?));
-        } else {
-            // The constant is the entry's first operand, as metadata wrapping a constant value.
-            let first = match m.md(e) {
-                crate::ir::Metadata::Tuple { ops, .. } => ops.first().copied().flatten(),
-                _ => None,
-            };
-            let (ty, value) = match first.map(|f| m.md(f)) {
-                Some(crate::ir::Metadata::Value { ty, value: value @ Value::Const(_) }) => (*ty, *value),
-                _ => return Err(r.error("air.linked_constants_signature", "a constant")),
-            };
-            r.advance();
-            let name = r.string("air.linked_constants_signature")?;
-            let index = r.i32("air.linked_constants_signature")?;
-            out.push(SignatureEntry::Constant { ty, value, name, index });
+        if let Some(sig) = signature_node(m, e, depth)? {
+            out.push(sig);
+            continue;
         }
+        let mut r = Cursor::node(m, e, format!("air.linked_constants_signature entry !{}", e.0), None)?;
+        // The constant is the entry's first operand, as metadata wrapping a constant value.
+        let first = match m.md(e) {
+            crate::ir::Metadata::Tuple { ops, .. } => ops.first().copied().flatten(),
+            _ => None,
+        };
+        let (ty, value) = match first.map(|f| m.md(f)) {
+            Some(crate::ir::Metadata::Value { ty, value: value @ Value::Const(_) }) => (*ty, *value),
+            _ => return Err(r.error("air.linked_constants_signature", "a constant")),
+        };
+        r.advance();
+        let name = r.string("air.linked_constants_signature")?;
+        let index = r.i32("air.linked_constants_signature")?;
+        out.push(SignatureEntry::Constant { ty, value, name, index });
         r.finish()?;
     }
     Ok(out)
+}
+
+/// A signature node (`AISignatureNode::classof`): `None` when the node's first operand is none of the three heads.
+fn signature_node(m: &Module, id: MdId, depth: u32) -> Result<Option<SignatureEntry>, Refusal> {
+    let mut r = Cursor::node(m, id, format!("air.linked_constants_signature entry !{}", id.0), None)?;
+    let key: &str = match head(&r) {
+        Some(b"air.module_signature") => "air.module_signature",
+        Some(b"air.linked_constants_signature") => "air.linked_constants_signature",
+        Some(b"air.rename_qualified_function_signature") => "air.rename_qualified_function_signature",
+        _ => return Ok(None),
+    };
+    r.advance();
+    if depth >= SIGNATURE_DEPTH {
+        return Err(r.error(key, "signature nodes nested at most 32 deep"));
+    }
+    let entry = match key {
+        "air.module_signature" => SignatureEntry::Module(r.string(key)?),
+        "air.linked_constants_signature" => SignatureEntry::LinkedConstants(linked_constants(m, &mut r, depth + 1)?),
+        _ => {
+            let base = r.node_id(key)?;
+            let signature = signature_node(m, base, depth + 1)?.ok_or_else(|| r.error(key, "a signature node"))?;
+            let name = r.string(key)?;
+            SignatureEntry::RenameQualifiedFunction { signature: Box::new(signature), name }
+        }
+    };
+    r.finish()?;
+    Ok(Some(entry))
 }
 
 // CoreImage -------------------------------------------------------------------------------------------------------

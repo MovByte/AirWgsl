@@ -301,9 +301,19 @@ mod tests {
     use super::*;
 
     /// Every key of the table is an `air.*` name of the target's compiler that the corpora use (a row of kind
-    /// `metadata` in `tables/intrinsics.toml`).
+    /// `metadata` in `tables/intrinsics.toml`), or one of the target compiler's strings (kind `string`, no corpus
+    /// module has it) whose writer in the compiler's code establishes its form.
     #[test]
     fn keys_are_names_of_the_target_compiler_seen_in_the_corpora() {
+        // Keys of the target compiler's code (libGPUCompilerImpl, 21H461) that no corpus module has: the writer that
+        // establishes each one's form.
+        let from_the_compiler = [
+            // `AIRMetadataPrunerPass::run` (0x1c4396ce4) and `upgradeAIRModule` (0x1c43b2808) write it in place of
+            // `air.compile.framebuffer_fetch_enable` when framebuffer fetch is off.
+            "air.compile.framebuffer_fetch_disable",
+            // `AIRenameQualifiedFunctionSignature::getImpl` (0x1c4362958).
+            "air.rename_qualified_function_signature",
+        ];
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tables/intrinsics.toml")).unwrap();
         let table: toml::Value = toml::from_str(&text).unwrap();
         let rows = table["name"].as_array().unwrap();
@@ -323,6 +333,7 @@ mod tests {
             "air.compile.fast_math_disable",
             "air.compile.denorms_disable",
             "air.compile.framebuffer_fetch_enable",
+            "air.compile.framebuffer_fetch_disable",
             "air.compile.native_double_disable",
             "air.function_constants",
             "air.sampler_states",
@@ -355,7 +366,8 @@ mod tests {
         for key in all {
             let row = rows.iter().find(|r| r["name"].as_str() == Some(key));
             let row = row.unwrap_or_else(|| panic!("{} is not an air.* name of the target's compiler", key));
-            assert_eq!(row["kind"].as_str(), Some("metadata"), "{} is not seen in the corpora", key);
+            let kind = if from_the_compiler.contains(&key) { "string" } else { "metadata" };
+            assert_eq!(row["kind"].as_str(), Some(kind), "{} is not seen in the corpora", key);
         }
     }
 }
