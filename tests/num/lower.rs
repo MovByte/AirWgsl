@@ -54,8 +54,19 @@ fn store(t: Ty, v: &str) -> String {
 /// Lower `op` over operands of `tys` and run it on the GPU for every item of `inputs` (each the operands' words,
 /// concatenated). Returns the result words per item.
 fn run_lowered(op: Op, tys: &[Ty], ret: Ty, flags: FastMath, rounding: &Rounding, inputs: &[Vec<u32>]) -> (Lowered, Vec<Vec<u32>>) {
-    let caps = host(Gpu::get().has_f16);
-    let target = Target { rounding, host: &caps };
+    run_lowered_on(&host(Gpu::get().has_f16), op, tys, ret, flags, rounding, inputs)
+}
+
+fn run_lowered_on(
+    caps: &HostCaps,
+    op: Op,
+    tys: &[Ty],
+    ret: Ty,
+    flags: FastMath,
+    rounding: &Rounding,
+    inputs: &[Vec<u32>],
+) -> (Lowered, Vec<Vec<u32>>) {
+    let target = Target { rounding, host: caps };
     let mut base = 0;
     let mut exprs = Vec::new();
     for t in tys {
@@ -754,4 +765,67 @@ fn half_lowering_on_this_device() {
             eprintln!("binary16 {:?} with {}: {:?}, {} lanes", op, if flags.finite_only() { "fast flags" } else { "no flags" }, l.rule.how, items.len() * 2);
         }
     }
+}
+
+/// binary16 on a device without shader-f16: fast-math arithmetic is the exact binary16 library under the default
+/// policy, and binary32 arithmetic rounded to binary16 under the native policy (exact for +, - and * when binary32
+/// rounds to nearest even); transcendental functions evaluate natively in binary32 and round to binary16 (MSL states
+/// no half-precision bound for the target), checked here to be within one binary16 ulp of the binary64 value.
+#[test]
+fn half_fallback_without_shader_f16() {
+    let caps = host(false);
+    let mut rng = Rng::new(37);
+    let ty = Ty::vector(Scalar::F16, 2);
+    let finite = |rng: &mut Rng| loop {
+        let h = rng.below(1 << 16);
+        if h & 0x7c00 != 0x7c00 {
+            break h;
+        }
+    };
+    let items: Vec<Vec<u32>> = (0..1 << 16).map(|_| (0..4).map(|_| finite(&mut rng)).collect()).collect();
+    let cases = selftest::cases();
+    let want: Vec<u32> = cases.iter().map(|c| c.want).collect();
+    let native = Rounding::Native(selftest::evaluate(&cases, &want).native_rounding().unwrap());
+    for rounding in [Rounding::SoftFloat, native] {
+        for (op, f) in [
+            (Inst::FAdd, (|a: u16, b: u16| r::h_add(a, b)) as fn(u16, u16) -> u16),
+            (Inst::FSub, |a, b| r::h_sub(a, b)),
+            (Inst::FMul, |a, b| r::h_mul(a, b)),
+            (Inst::FDiv, |a, b| r::h_div(a, b)),
+        ] {
+            let (l, got) = run_lowered_on(&caps, Op::Inst(op), &[ty, ty], ty, FastMath::FAST, &rounding, &items);
+            assert!(l.enables.is_empty() && l.requirements.features.is_empty(), "no f16 needed");
+            // Sums, differences and products of binary16 values are never binary32 subnormals (they are multiples
+            // of 2^-24, or at least 2^-48), so a host that flushes binary32 subnormals cannot change them.
+            let mut mismatches = 0;
+            for (inp, g) in items.iter().zip(&got) {
+                for lane in 0..2 {
+                    let (a, b) = (inp[lane] as u16, inp[2 + lane] as u16);
+                    let w = f(a, b) as u32;
+                    if w & 0x7c00 == 0x7c00 {
+                        continue;
+                    }
+                    if g[lane] != w {
+                        mismatches += 1;
+                    }
+                }
+            }
+            assert_eq!(mismatches, 0, "{:?} {:?}", op, l.rule);
+            eprintln!("binary16 without shader-f16, {:?} ({:?}): {} lanes exact", op, l.rule.how, items.len() * 2);
+        }
+    }
+    // A transcendental function: binary32 evaluation rounded to binary16.
+    let soft = Rounding::SoftFloat;
+    let (l, got) = run_lowered_on(&caps, Op::Call("air.sin.v2f16"), &[ty], ty, FastMath::FAST, &soft, &items);
+    let mut max = 0f64;
+    for (inp, g) in items.iter().zip(&got) {
+        for lane in 0..2 {
+            let x = r::f(r::f16_to_f32(inp[lane] as u16)) as f64;
+            let y = r::f(r::f16_to_f32(g[lane] as u16)) as f64;
+            let e = (y - x.sin()).abs() / crate::math::ulp16(x.sin());
+            max = max.max(e);
+        }
+    }
+    eprintln!("air.sin.v2f16 without shader-f16 ({:?}): max error {} binary16 ulp", l.rule.how, max);
+    assert!(max <= 1.0);
 }
