@@ -18,6 +18,11 @@
 //!   type is its operand, a cast of `undef` is `undef` or zero, a GEP with all-zero indices is its pointer).
 //! - A [`Function`] holds its arguments, its blocks in layout order, and an instruction arena; a block lists its
 //!   instructions by [`InstId`]. A declaration has no blocks.
+//! - [`Op`] covers LLVM 21's instructions other than those the reader refuses (exception handling, `callbr`, and
+//!   calls of inline assembly): arithmetic, casts (including `ptrtoint`, `inttoptr` and `addrspacecast`),
+//!   comparisons, memory access and atomics, aggregates and vectors, `freeze`, `va_arg`, calls and the terminators. A call of an intrinsic (`llvm.*`,
+//!   or AIR's `air.*`) is an ordinary [`Op::Call`] of a declared function; LLVM's own intrinsics carry the attributes
+//!   LLVM 21's intrinsic tables give them.
 //! - Metadata is pooled and uniqued like LLVM's: strings by content, value wrappers by value, and non-distinct tuples
 //!   by operands; distinct tuples are never merged.
 //!
