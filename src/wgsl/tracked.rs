@@ -421,6 +421,22 @@ pub const ITEMS: &[Item] = &[
         reference: "MSL 1.6.7, 8.7.2",
     },
     Item {
+        id: "texture-dynamic-offset",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a texel offset computed at run time (system modules compute them): WGSL sampling offsets are \
+                  constant expressions",
+        reference: "WGSL 17.7; MSL 6.13",
+    },
+    Item {
+        id: "texture-filter-mode",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a sampler filter WebGPU does not have (MSL filter::bicubic): no WGSL sampling function filters \
+                  bicubically, and Metal states no weights to reproduce",
+        reference: "WebGPU GPUSamplerDescriptor",
+    },
+    Item {
         id: "texture-slot-mismatch",
         owner: None,
         kind: RefusalKind::RejectedByDevice,

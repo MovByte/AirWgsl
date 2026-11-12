@@ -35,8 +35,13 @@ fn call_form(construct: &str, detail: &str) -> Refusal {
 fn offset(cx: &dyn RuleCx, construct: &str, has: Value, off: Value, lanes: usize) -> R<Option<Vec<i32>>> {
     let m = cx.module();
     let has = const_int(m, has).ok_or_else(|| call_form(construct, "a non-constant offset flag"))?;
-    let v =
-        const_ivec(m, off).ok_or_else(|| call_form(construct, "a non-constant offset (MSL requires a constant)"))?;
+    let v = const_ivec(m, off).ok_or_else(|| {
+        refuse(
+            "texture-dynamic-offset",
+            construct,
+            "a texel offset computed at run time: WGSL offsets are constant expressions",
+        )
+    })?;
     if v.len() != lanes {
         return Err(call_form(construct, "an offset of the wrong length"));
     }
@@ -1109,7 +1114,7 @@ fn check_min_lod(m: &Module, c: &str, v: Value) -> R<()> {
 }
 
 fn unfilterable(t: &Tex, c: &str) -> Refusal {
-    let name = t.format.map(|(f, _)| f.name).unwrap_or("");
+    let name = t.format.map(|(f, _)| f.name).unwrap_or("of a depth texture argument");
     if matches!(t.format.map(|(f, _)| f.value), Some(20 | 22 | 60 | 62 | 110 | 112)) {
         return tracked::refuse_row(
             "unorm16-filtering",

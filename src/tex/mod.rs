@@ -492,7 +492,15 @@ pub(crate) fn sampler(cx: &dyn RuleCx, construct: &str, v: Value) -> R<Smp> {
             "the sampler operand is not one sampler argument or constant sampler",
         ));
     };
-    let d = crate::air::sampler::decode(word)?;
+    // A word the target's Metal fails to decode (a reserved bit set by a newer setting, such as a reduction mode) is a
+    // sampler the A10X does not support.
+    let d = crate::air::sampler::decode(word).map_err(|r| {
+        refuse(
+            "texture-above-family",
+            construct,
+            format!("{} (setDescriptorFromBitmask in the target's Metal fails on it)", r.reason),
+        )
+    })?;
     let half = |b: u16| half_to_f32(b);
     Ok(Smp {
         source: BindingSource::ConstantSampler { encoding: word },
@@ -559,9 +567,13 @@ pub(crate) fn check_sampler(d: &SamplerSlot, axes: usize, construct: &str) -> R<
     }
     if d.min_filter > 1 || d.mag_filter > 1 || d.mip_filter > 2 {
         return Err(refuse(
-            "texture-slot-mismatch",
+            "texture-filter-mode",
             construct,
-            "a filter value with no MTLSamplerDescriptor enumerator",
+            format!(
+                "filter codes min {} mag {} mip {}: a filter with no MTLSamplerDescriptor enumerator (MSL \
+                 filter::bicubic writes code 2)",
+                d.min_filter, d.mag_filter, d.mip_filter
+            ),
         ));
     }
     Ok(())
@@ -786,6 +798,7 @@ mod tests {
         assert!(!r.handles("air.calculate_clamped_lod_texture_2d"));
         assert!(!r.handles("air.get_num_samples.i32"));
         assert!(r.claims_argument("air.texture") && r.claims_argument("air.sampler"));
+        assert_eq!(tracked::compiler_item("texture-above-family").kind, RefusalKind::RejectedByDevice);
         assert!(!r.claims_argument("air.buffer"));
     }
 
