@@ -60,8 +60,13 @@ fn run_probe(cases: &[selftest::Case]) -> Vec<u32> {
     let slice = rb.slice(..);
     slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
     device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    let v: Vec<u32> =
-        slice.get_mapped_range().chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let v: Vec<u32> = slice
+        .get_mapped_range()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
     rb.unmap();
     v
 }

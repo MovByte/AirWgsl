@@ -10,6 +10,7 @@ use airwgsl::api::{HostCaps, RefusalKind};
 use airwgsl::num::{
     Column, FPred, FastMath, How, Inst, Lowered, Op, Operand, Rounding, Scalar, Target, Ty, lower, selftest,
 };
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 fn host(f16: bool) -> HostCaps {
@@ -730,13 +731,13 @@ fn comparisons_are_ieee() {
         (FPred::Oge, |a, b| a >= b),
         (FPred::Olt, |a, b| a < b),
         (FPred::Ole, |a, b| a <= b),
-        (FPred::One, |a, b| a < b || a > b),
+        (FPred::One, |a, b| matches!(a.partial_cmp(&b), Some(Ordering::Less | Ordering::Greater))),
         (FPred::Ord, |a, b| !a.is_nan() && !b.is_nan()),
         (FPred::Ueq, |a, b| a.is_nan() || b.is_nan() || a == b),
-        (FPred::Ugt, |a, b| !(a <= b)),
-        (FPred::Uge, |a, b| !(a < b)),
-        (FPred::Ult, |a, b| !(a >= b)),
-        (FPred::Ule, |a, b| !(a > b)),
+        (FPred::Ugt, |a, b| !matches!(a.partial_cmp(&b), Some(Ordering::Less | Ordering::Equal))),
+        (FPred::Uge, |a, b| !matches!(a.partial_cmp(&b), Some(Ordering::Less))),
+        (FPred::Ult, |a, b| !matches!(a.partial_cmp(&b), Some(Ordering::Greater | Ordering::Equal))),
+        (FPred::Ule, |a, b| !matches!(a.partial_cmp(&b), Some(Ordering::Greater))),
         (FPred::Une, |a, b| a != b),
         (FPred::Uno, |a, b| a.is_nan() || b.is_nan()),
     ];

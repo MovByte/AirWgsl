@@ -224,16 +224,16 @@ fn srgb_conversions() {
         let k = kernel(&name, &[Ty::scalar(Scalar::I32)], vt, 1);
         let words: Vec<u32> = (0..256u32).map(|c| c | c << 8 | c << 16 | c << 24).collect();
         let got = run(&k, &words, 1, 4);
-        for c in 0..256usize {
+        for (c, g) in got[..256].iter().enumerate() {
             let x = c as f64 / 255.0;
             let lin = if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) };
             let want = if half { r::f32_to_f16((lin as f32).to_bits()) as u32 } else { (lin as f32).to_bits() };
-            for comp in 0..3 {
-                assert_eq!(got[c][comp], want, "{} code {}", name, c);
+            for &v in &g[..3] {
+                assert_eq!(v, want, "{} code {}", name, c);
             }
             // Alpha is linear (MSL 8.7.7).
             let a = if half { f16_nearest(c as u64, 255) } else { (c as f32 / 255.0).to_bits() };
-            assert_eq!(got[c][3], a, "{} alpha {}", name, c);
+            assert_eq!(g[3], a, "{} alpha {}", name, c);
         }
         eprintln!("{}: every code", name);
     }
@@ -404,8 +404,8 @@ fn pack_and_unpack_match_metal() {
         let mut within = 0;
         let mut differ = Vec::new();
         for (c, g) in cases.iter().zip(&got) {
-            for comp in 0..n as usize {
-                let (m, o) = (c.outs[comp], g[comp]);
+            for (comp, &o) in g[..n as usize].iter().enumerate() {
+                let m = c.outs[comp];
                 if m == o {
                     continue;
                 }

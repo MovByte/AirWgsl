@@ -142,10 +142,10 @@ mod tests {
             }
             if let Some(r) = cur.as_mut() {
                 for (k, key) in ["id", "fast_f32", "precise_f32", "half"].iter().enumerate() {
-                    if let Some(v) = value(line, key) {
-                        if line.starts_with(&format!("{} ", key)) {
-                            r[k] = v;
-                        }
+                    if let Some(v) = value(line, key)
+                        && line.starts_with(&format!("{} ", key))
+                    {
+                        r[k] = v;
                     }
                 }
             }

@@ -169,11 +169,9 @@ fn sp_sinpi(a: &[u32]) -> Option<u32> {
         Some(DNAN)
     } else if int_parity(a[0]).is_some() {
         Some(zero_of(a[0]))
-    } else if let Some(odd) = half_int_parity(a[0]) {
-        // sin(pi (n + 1/2)) = (-1)^n exactly.
-        Some(if odd { 0xbf80_0000 } else { ONE })
     } else {
-        None
+        // sin(pi (n + 1/2)) = (-1)^n exactly.
+        half_int_parity(a[0]).map(|odd| if odd { 0xbf80_0000 } else { ONE })
     })
 }
 
@@ -197,10 +195,8 @@ fn sp_tanpi(a: &[u32]) -> Option<u32> {
         Some(DNAN)
     } else if let Some(odd) = int_parity(a[0]) {
         Some(if odd { zero_of(a[0]) ^ 0x8000_0000 } else { zero_of(a[0]) })
-    } else if let Some(odd) = half_int_parity(a[0]) {
-        Some(if odd { NINF } else { PINF })
     } else {
-        None
+        half_int_parity(a[0]).map(|odd| if odd { NINF } else { PINF })
     })
 }
 

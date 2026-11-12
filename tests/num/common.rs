@@ -203,13 +203,13 @@ fn binary16_forms() {
     let narrow = |x: u32| r::f32_to_f16(x) as u32;
     let q16 = |h: u32| h | 0x0200;
     let nan16 = |h: u32| h & 0x7fff > 0x7c00;
-    run("nm_f16_fabs", &[all.clone()], |a| a[0] & 0x7fff);
-    run("nm_f16_ceil", &[all.clone()], move |a| narrow(f(widen(a[0])).ceil().to_bits()));
-    run("nm_f16_floor", &[all.clone()], move |a| narrow(f(widen(a[0])).floor().to_bits()));
-    run("nm_f16_trunc", &[all.clone()], move |a| narrow(f(widen(a[0])).trunc().to_bits()));
-    run("nm_f16_rint", &[all.clone()], move |a| narrow(f(widen(a[0])).round_ties_even().to_bits()));
-    run("nm_f16_round", &[all.clone()], move |a| narrow(f(widen(a[0])).round().to_bits()));
-    run("nm_f16_fract", &[all.clone()], move |a| {
+    run("nm_f16_fabs", std::slice::from_ref(&all), |a| a[0] & 0x7fff);
+    run("nm_f16_ceil", std::slice::from_ref(&all), move |a| narrow(f(widen(a[0])).ceil().to_bits()));
+    run("nm_f16_floor", std::slice::from_ref(&all), move |a| narrow(f(widen(a[0])).floor().to_bits()));
+    run("nm_f16_trunc", std::slice::from_ref(&all), move |a| narrow(f(widen(a[0])).trunc().to_bits()));
+    run("nm_f16_rint", std::slice::from_ref(&all), move |a| narrow(f(widen(a[0])).round_ties_even().to_bits()));
+    run("nm_f16_round", std::slice::from_ref(&all), move |a| narrow(f(widen(a[0])).round().to_bits()));
+    run("nm_f16_fract", std::slice::from_ref(&all), move |a| {
         let h = a[0];
         if nan16(h) {
             return q16(h);

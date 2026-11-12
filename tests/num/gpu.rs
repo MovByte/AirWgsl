@@ -35,9 +35,11 @@ impl Gpu {
             .expect("no WebGPU adapter: the numerics GPU tests need one");
             let info = adapter.get_info();
             let has_f16 = adapter.features().contains(wgpu::Features::SHADER_F16);
-            let mut limits = wgpu::Limits::default();
-            limits.max_storage_buffer_binding_size = (MAX_ITEMS as u64) * 4 * 4;
-            limits.max_buffer_size = (MAX_ITEMS as u64) * 4 * 4;
+            let limits = wgpu::Limits {
+                max_storage_buffer_binding_size: (MAX_ITEMS as u64) * 4 * 4,
+                max_buffer_size: (MAX_ITEMS as u64) * 4 * 4,
+                ..wgpu::Limits::default()
+            };
             let features = if has_f16 { wgpu::Features::SHADER_F16 } else { wgpu::Features::empty() };
             let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("numerics tests"),
@@ -222,8 +224,8 @@ impl Kernel {
         let words = {
             let view = slice.get_mapped_range();
             let mut v = vec![0u32; (bytes / 4) as usize];
-            for (w, c) in v.iter_mut().zip(view[..bytes as usize].chunks_exact(4)) {
-                *w = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            for (w, c) in v.iter_mut().zip(view[..bytes as usize].as_chunks::<4>().0) {
+                *w = u32::from_le_bytes(*c);
             }
             v
         };

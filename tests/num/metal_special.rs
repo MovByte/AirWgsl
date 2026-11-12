@@ -115,11 +115,12 @@ fn compare(name: &str, item: &str, arity: usize, outs: usize, call: &str) -> Vec
             }
             let (fm, fo) = (f32::from_bits(metal), f32::from_bits(ours));
             let finite = fm.is_finite() && fo.is_finite() && fm != 0.0 && (metal >> 31) == (ours >> 31);
-            if let Some(b) = ulp_bound(name) {
-                if finite && (metal as i64 - ours as i64).abs() <= b {
-                    tally.0 += 1;
-                    continue;
-                }
+            if let Some(b) = ulp_bound(name)
+                && finite
+                && (metal as i64 - ours as i64).abs() <= b
+            {
+                tally.0 += 1;
+                continue;
             }
             match deliberate(name, &c.ops, metal, ours) {
                 Some(rule) => {
