@@ -1,0 +1,34 @@
+# Metal Version 27.0.1 (Build 26A434), Apple M4
+predicate int 02000000 kept
+predicate int 00000000 dropped
+predicate int ffffffff kept
+predicate int 01000000 kept
+predicate int unset dropped
+predicate bool2 0100 kept
+predicate bool2 0000 dropped
+predicate bool2 0001 kept
+predicate bool2 0101 kept
+predicate bool2 unset dropped
+predicate float 00000080 kept
+predicate float 00000000 dropped
+predicate float 0000c07f kept
+predicate float 0000803f kept
+predicate float 01000000 kept
+predicate float 0000807f kept
+predicate float unset dropped
+predicate uchar 02 kept
+predicate uchar 00 dropped
+predicate uchar 01 kept
+predicate uchar ff kept
+predicate uchar unset dropped
+missing used ok ret void
+missing defaulted ok store i32 9; ret void
+typed int 3 0000803f error 3
+typed int 33 05000000 error 3
+typed int 53 01 error 3
+typed uint 29 05000000 error 3
+typed bool 49 01 error 3
+typed bool 53 01 ok store i32 7
+typed bool 53 02 ok store i32 7
+typed bool2 54 0100 ok store i32 16
+typed bool2 54 0203 ok store i32 1
