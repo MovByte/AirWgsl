@@ -225,7 +225,11 @@ impl Rules {
     }
 }
 
-/// The rules of the lowering packages that have landed. None has yet: each package appends its rule set here.
+/// The rules of the lowering packages that have landed: each package appends its rule set here.
 pub fn registered() -> Rules {
-    Rules::new()
+    let mut r = Rules::new();
+    for rule in crate::sync::rules() {
+        r = r.with(rule);
+    }
+    r
 }

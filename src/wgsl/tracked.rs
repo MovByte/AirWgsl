@@ -259,6 +259,15 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.1 stages 2 and 3",
     },
     Item {
+        id: "sync-operand",
+        owner: None,
+        kind: RefusalKind::RejectedByDevice,
+        summary: "an atomic or barrier operand the target does not accept: a memory order other than relaxed (D1: \
+                  supportsMemoryOrderAtomics = false), or a scope, memory flag or operand count MSL 3.1's front end \
+                  does not produce",
+        reference: "MSL 6.10.1, 6.16; D1 device profile",
+    },
+    Item {
         id: "threadgroup-memory-length",
         owner: None,
         kind: RefusalKind::RejectedByDevice,

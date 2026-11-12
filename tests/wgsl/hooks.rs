@@ -61,8 +61,15 @@ fn a_registered_rule_lowers_its_calls_and_makes_the_region_atomic() {
         }),
         bindings: Vec::new(),
     };
-    // Without the rule the call is refused with its family.
-    let r = compile(std::slice::from_ref(&m), &desc, &HostCaps::default()).unwrap_err();
+    // Without a rule for it the call is refused with its family.
+    let r = airwgsl::wgsl::compile_with(
+        std::slice::from_ref(&m),
+        &desc,
+        &HostCaps::default(),
+        &Rules::new(),
+        &Rounding::SoftFloat,
+    )
+    .unwrap_err();
     assert!(r.reason.starts_with("[family:atomic-int32]"), "{}", r);
     let rules = Rules::new().with(Box::new(AtomicAdd));
     let c = airwgsl::wgsl::compile_with(&[m], &desc, &HostCaps::default(), &rules, &Rounding::SoftFloat).unwrap();
