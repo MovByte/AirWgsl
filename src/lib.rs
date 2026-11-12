@@ -11,6 +11,7 @@ pub mod bitstream;
 pub mod ir;
 pub mod mtlb;
 pub mod num;
+pub mod reflect;
 
 pub use api::*;
 pub use bitcode::parse_bitcode;
