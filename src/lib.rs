@@ -9,6 +9,8 @@ pub mod num;
 pub mod bitcode;
 pub mod bitstream;
 pub mod ir;
+pub mod mtlb;
 
 pub use api::*;
 pub use bitcode::parse_bitcode;
+pub use mtlb::parse_metallib;
