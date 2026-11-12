@@ -20,6 +20,7 @@
 //   colors             (render, optional) [[attachment, MTLPixelFormat]]
 //   depth, stencil     (render, optional) MTLPixelFormat
 //   topology           (render, optional) MTLPrimitiveTopologyClass
+//   rasterization      (render, optional) 0 to disable rasterization
 //   tessellation       (render, optional) {"partition", "max_factor", "factor_format", "control_point_index_type",
 //                      "step_function", "winding", "factor_scale"}
 //   dump               (optional) a path: the bitcode of the job's function from `library` (the kernel, or the
@@ -322,6 +323,7 @@ static NSUInteger N(NSDictionary *d, NSString *k, NSUInteger def) {
     d.depthAttachmentPixelFormat = (MTLPixelFormat)N(job, @"depth", 0);
     d.stencilAttachmentPixelFormat = (MTLPixelFormat)N(job, @"stencil", 0);
     d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)N(job, @"topology", 0);
+    d.rasterizationEnabled = N(job, @"rasterization", 1) != 0;
     NSDictionary *t = job[@"tessellation"];
     if (t) {
         d.tessellationPartitionMode = (MTLTessellationPartitionMode)N(t, @"partition", 0);

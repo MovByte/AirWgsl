@@ -483,7 +483,13 @@ fn job(lib: &str, m: &AirModule, e: &EntryPoint, id: &str, dump: &str) -> Result
                 j.push(("vertex_descriptor", obj(vec![("layouts", J::A(layouts)), ("attributes", J::A(attrs))])));
                 setup.vertex_descriptor = Some(vd);
             }
-            if e.outputs.iter().any(|o| {
+            if e.outputs.is_empty() {
+                // A vertex function that returns nothing is valid only without rasterization.
+                j.push(("rasterization", J::N(0)));
+            } else if e.outputs.iter().any(|o| matches!(o.role, OutputRole::Builtin("air.point_size"))) {
+                // Writing the point size requires the point topology class.
+                j.push(("topology", J::N(1)));
+            } else if e.outputs.iter().any(|o| {
                 matches!(o.role, OutputRole::Builtin("air.render_target_array_index" | "air.viewport_array_index"))
             }) {
                 j.push(("topology", J::N(3)));
