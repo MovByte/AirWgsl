@@ -159,10 +159,10 @@ pub(crate) fn upgrade_datalayout(dl: &str, triple: &str) -> Result<String, Strin
             res.push_str("-p8:128:128:128:48");
         }
         const OLD_P8: &str = "-p8:128:128-";
-        if dl.contains(OLD_P8) {
-            if let Some(i) = res.find(OLD_P8) {
-                res.replace_range(i..i + OLD_P8.len(), "-p8:128:128:128:48-");
-            }
+        if dl.contains(OLD_P8)
+            && let Some(i) = res.find(OLD_P8)
+        {
+            res.replace_range(i..i + OLD_P8.len(), "-p8:128:128:128:48-");
         }
         if !dl.contains("-p9") && !dl.starts_with("p9") {
             res.push_str("-p9:192:256:256:32");
@@ -171,10 +171,10 @@ pub(crate) fn upgrade_datalayout(dl: &str, triple: &str) -> Result<String, Strin
     }
     let add_ptr32_ptr64 = |res: &mut String| {
         const ADDR_SPACES: &str = "-p270:32:32-p271:32:32-p272:64:64";
-        if !dl.contains(ADDR_SPACES) {
-            if let Some((head, tail)) = match_ptr_prefix(res) {
-                *res = format!("{}{}{}", head, ADDR_SPACES, tail);
-            }
+        if !dl.contains(ADDR_SPACES)
+            && let Some((head, tail)) = match_ptr_prefix(res)
+        {
+            *res = format!("{}{}{}", head, ADDR_SPACES, tail);
         }
     };
     if arch == AArch64 {
@@ -186,10 +186,10 @@ pub(crate) fn upgrade_datalayout(dl: &str, triple: &str) -> Result<String, Strin
     }
     if matches!(arch, Sparc | Ppc64 | Wasm) || (arch == Mips64 && !dl.contains("m:m")) {
         const I64: &str = "-i64:64";
-        if !res.contains("-i128:128") {
-            if let Some(p) = res.find(I64) {
-                res.insert_str(p + I64.len(), "-i128:128");
-            }
+        if !res.contains("-i128:128")
+            && let Some(p) = res.find(I64)
+        {
+            res.insert_str(p + I64.len(), "-i128:128");
         }
         return Ok(res);
     }
@@ -198,19 +198,22 @@ pub(crate) fn upgrade_datalayout(dl: &str, triple: &str) -> Result<String, Strin
     }
     add_ptr32_ptr64(&mut res);
     let iamcu = os.map(|o| os_is(o, &["elfiamcu"])).unwrap_or(false);
-    if !iamcu && !res.contains("-i128:128") {
-        if let Some((head, tail)) = match_i128_split(&res) {
-            res = format!("{}-i128:128{}", head, tail);
-        }
+    if !iamcu
+        && !res.contains("-i128:128")
+        && let Some((head, tail)) = match_i128_split(&res)
+    {
+        res = format!("{}-i128:128{}", head, tail);
     }
     // `isWindowsMSVCEnvironment() && !isArch64Bit()`.
     let windows = os.map(|o| os_is(o, &["win32", "windows"])).unwrap_or(false);
     let env_unknown = env.map(|e| !ENVIRONMENT_PREFIXES.iter().any(|p| e.starts_with(p))).unwrap_or(true);
     let env_msvc = env.map(|e| e.starts_with("msvc")).unwrap_or(false);
-    if windows && (env_msvc || env_unknown) && arch == X86 {
-        if let Some(i) = res.find("-f80:32-") {
-            res = format!("{}-f80:128-{}", &res[..i], &res[i + 8..]);
-        }
+    if windows
+        && (env_msvc || env_unknown)
+        && arch == X86
+        && let Some(i) = res.find("-f80:32-")
+    {
+        res = format!("{}-f80:128-{}", &res[..i], &res[i + 8..]);
     }
     Ok(res)
 }

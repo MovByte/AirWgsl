@@ -1212,10 +1212,8 @@ impl Module {
     /// Adds metadata; strings, values and non-distinct tuples are uniqued, distinct tuples always added.
     pub fn intern_md(&mut self, md: Metadata) -> MdId {
         let unique = !matches!(md, Metadata::Tuple { distinct: true, .. });
-        if unique {
-            if let Some(&id) = self.md_unique.get(&md) {
-                return id;
-            }
+        if unique && let Some(&id) = self.md_unique.get(&md) {
+            return id;
         }
         let id = MdId(self.metadata.len() as u32);
         self.metadata.push(md.clone());

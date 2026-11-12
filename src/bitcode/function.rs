@@ -197,10 +197,10 @@ impl<'a> Reader<'a> {
         st.inst_list.push(id);
         if numbered && !self.m.types.is_void(ty) {
             let valno = self.next_value();
-            if let Some(t) = st.pending.get(&valno) {
-                if *t != ty {
-                    return self.malformed("assigned value does not match the type of its forward reference");
-                }
+            if let Some(t) = st.pending.get(&valno)
+                && *t != ty
+            {
+                return self.malformed("assigned value does not match the type of its forward reference");
             }
             let bc = match bc_ty {
                 Some(b) => b,
@@ -380,12 +380,12 @@ impl<'a> Reader<'a> {
             map.insert(valno, v);
         }
         let fix = |v: &mut Value| -> core::result::Result<(), ()> {
-            if let Value::Inst(InstId(i)) = v {
-                if *i & FWD != 0 {
-                    match map.get(&(*i & !FWD)) {
-                        Some(r) => *v = *r,
-                        None => return Err(()),
-                    }
+            if let Value::Inst(InstId(i)) = v
+                && *i & FWD != 0
+            {
+                match map.get(&(*i & !FWD)) {
+                    Some(r) => *v = *r,
+                    None => return Err(()),
                 }
             }
             Ok(())
@@ -972,7 +972,7 @@ impl<'a> Reader<'a> {
                 if ops[0] >> 16 == 0x4B5 {
                     return self.unsupported("switch records with case ranges (SWITCH_INST_MAGIC)");
                 }
-                if ops.len() < 3 || ops.len() % 2 == 0 {
+                if ops.len() < 3 || ops.len().is_multiple_of(2) {
                     return self.malformed("invalid switch record");
                 }
                 let ty = self.ty(ops[0])?;
@@ -1609,7 +1609,7 @@ pub(crate) fn visit_values_mut(op: &mut Op, f: &mut dyn FnMut(&mut Value)) {
         }
         Op::Gep { ptr, indices, .. } => {
             f(ptr);
-            indices.iter_mut().for_each(|v| f(v));
+            indices.iter_mut().for_each(&mut *f);
         }
         Op::ExtractElement { vec, idx } => {
             f(vec);
@@ -1631,9 +1631,9 @@ pub(crate) fn visit_values_mut(op: &mut Op, f: &mut dyn FnMut(&mut Value)) {
         }
         Op::Call { callee, args, bundles, .. } => {
             f(callee);
-            args.iter_mut().for_each(|v| f(v));
+            args.iter_mut().for_each(&mut *f);
             for b in bundles {
-                b.inputs.iter_mut().for_each(|v| f(v));
+                b.inputs.iter_mut().for_each(&mut *f);
             }
         }
         Op::AtomicRmw { ptr, value, .. } => {

@@ -117,7 +117,7 @@ impl Verifier {
             return if self.is_valid_scalar(m, id) { (false, 0) } else { INVALID };
         }
         if new_format {
-            if ops.len() % 3 != 0 {
+            if !ops.len().is_multiple_of(3) {
                 return INVALID;
             }
             if const_int(m, ops[1]).is_none() {
@@ -158,10 +158,10 @@ impl Verifier {
                 idx += per;
                 continue;
             }
-            if let Some(p) = prev {
-                if p > value {
-                    failed = true;
-                }
+            if let Some(p) = prev
+                && p > value
+            {
+                failed = true;
             }
             prev = Some(value);
             if new_format && const_int(m, ops.get(idx + 2).copied().flatten()).is_none() {

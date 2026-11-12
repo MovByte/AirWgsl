@@ -415,7 +415,7 @@ impl<'a> Reader<'a> {
 
     /// (kind, metadata) pairs of an attachment record.
     pub(super) fn attachment_pairs(&self, ops: &[u64]) -> Result<Vec<(u32, MdId)>> {
-        if ops.len() % 2 != 0 {
+        if !ops.len().is_multiple_of(2) {
             return self.malformed("invalid attachment record");
         }
         let mut out = Vec::new();

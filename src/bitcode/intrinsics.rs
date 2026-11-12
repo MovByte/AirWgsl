@@ -624,7 +624,7 @@ fn attributes(m: &mut Module, index: usize, fty: TypeId) -> AttrList {
                         let mut w = vec![if v < 0 { u64::MAX } else { 0 }; n.max(1)];
                         w[0] = v as u64;
                         let last = w.len() - 1;
-                        if bits % 64 != 0 {
+                        if !bits.is_multiple_of(64) {
                             w[last] &= mask;
                         }
                         w
@@ -726,10 +726,10 @@ pub(super) fn upgrade_intrinsics(r: &mut Reader) -> Result<()> {
             return r.unsupported(format!("{}: the upgrade of {} is not implemented", name, what));
         }
         let ret = r.m.types.function(fty).unwrap().0;
-        if matches!(r.m.types.get(ret), Type::Struct { .. } | Type::LiteralStruct { packed: true, .. }) {
-            if let Some(Some(D::Struct(_))) = table_entries(index).map(|t| t.first().copied()) {
-                return r.unsupported(format!("{}: the struct return upgrade is not implemented", name));
-            }
+        if matches!(r.m.types.get(ret), Type::Struct { .. } | Type::LiteralStruct { packed: true, .. })
+            && let Some(Some(D::Struct(_))) = table_entries(index).map(|t| t.first().copied())
+        {
+            return r.unsupported(format!("{}: the struct return upgrade is not implemented", name));
         }
         let sig = match signature(&mut r.m.types, index, fty) {
             Some(s) => s,
@@ -829,10 +829,10 @@ pub(super) fn upgrade_intrinsics(r: &mut Reader) -> Result<()> {
 /// Replaces references to function `from` with `to` for every pair in `map`.
 fn redirect_uses(m: &mut Module, map: &std::collections::HashMap<u32, u32>) -> Result<()> {
     let fix = |v: &mut Value| {
-        if let Value::Global(GlobalId::Function(f)) = v {
-            if let Some(t) = map.get(f) {
-                *f = *t;
-            }
+        if let Value::Global(GlobalId::Function(f)) = v
+            && let Some(t) = map.get(f)
+        {
+            *f = *t;
         }
     };
     for f in m.functions.iter_mut() {

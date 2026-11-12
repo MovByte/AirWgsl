@@ -134,10 +134,10 @@ fn parse_all(bytes: &[u8]) -> bool {
     }
     if let Ok(lib) = airwgsl::parse_metallib(bytes) {
         for f in &lib.functions {
-            if let Some(module) = f.module {
-                if let Ok(m) = airwgsl::parse_bitcode(module) {
-                    let _ = airwgsl::ir::print::print_module(&m);
-                }
+            if let Some(module) = f.module
+                && let Ok(m) = airwgsl::parse_bitcode(module)
+            {
+                let _ = airwgsl::ir::print::print_module(&m);
             }
         }
         ok = true;

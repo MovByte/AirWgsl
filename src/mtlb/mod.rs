@@ -626,10 +626,10 @@ impl<'a> Metallib<'a> {
             out.push(SectionRecord { offset: (p - start) as u64, size: word, tags });
             p += total;
         }
-        if let Some(c) = count {
-            if c != out.len() {
-                return err(start, format!("{} count {} with {} records", what, c, out.len()));
-            }
+        if let Some(c) = count
+            && c != out.len()
+        {
+            return err(start, format!("{} count {} with {} records", what, c, out.len()));
         }
         Ok(out)
     }
@@ -684,12 +684,12 @@ fn check_records(lib: &Metallib) -> Result<()> {
         }
     }
     let dynamic = lib.dynamic_header_tags()?;
-    if lib.dynamic_header.is_some() {
+    if let Some(header) = lib.dynamic_header {
         match dynamic.as_slice() {
             [t] if &t.name == b"NAME" => {
-                cstr(t.data, "dynamic header NAME tag", lib.dynamic_header.unwrap().offset as usize)?;
+                cstr(t.data, "dynamic header NAME tag", header.offset as usize)?;
             }
-            _ => return err(lib.dynamic_header.unwrap().offset as usize, "dynamic header is not one NAME tag"),
+            _ => return err(header.offset as usize, "dynamic header is not one NAME tag"),
         }
     }
     Ok(())
@@ -707,25 +707,13 @@ const LC_SEGMENT_64: u32 = 0x19;
 /// Where a library or module sits in a file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item<'a> {
-    Metallib {
-        location: String,
-        offset: usize,
-        lib: Metallib<'a>,
-    },
+    /// A metallib (boxed: it is much larger than the other variants).
+    Metallib { location: String, offset: usize, lib: Box<Metallib<'a>> },
     /// One bitcode module that is not inside a metallib (a raw or wrapped bitcode file, an archive member, an entry of
     /// the GPU driver's runtime tables).
-    Module {
-        location: String,
-        name: String,
-        offset: usize,
-        bytes: &'a [u8],
-    },
+    Module { location: String, name: String, offset: usize, bytes: &'a [u8] },
     /// A pipeline-library entry, archive member or Mach-O section that holds no AIR, counted.
-    Other {
-        location: String,
-        offset: usize,
-        size: usize,
-    },
+    Other { location: String, offset: usize, size: usize },
 }
 
 /// Reads a file of any of the forms AIR ships in (the forms measured on the system root): a metallib, a big-endian
@@ -755,7 +743,7 @@ fn structure<'a>(
         if base + (lib.header.file_size as usize) != limit {
             return err(base, format!("{} bytes after the metallib", limit - base - lib.header.file_size as usize));
         }
-        out.push(Item::Metallib { location: format!("{}mtlb", loc), offset: base, lib });
+        out.push(Item::Metallib { location: format!("{}mtlb", loc), offset: base, lib: Box::new(lib) });
         return Ok(());
     }
     if head.starts_with(&FAT_MAGIC_64) {
@@ -864,13 +852,13 @@ fn metallib_section<'a>(data: &'a [u8], start: usize, end: usize, loc: &str, out
         }
         let lib = parse_metallib(&data[p..end])?;
         let next = p + lib.header.file_size as usize;
-        out.push(Item::Metallib { location: format!("{}[{}]/", loc, index), offset: p, lib });
+        out.push(Item::Metallib { location: format!("{}[{}]/", loc, index), offset: p, lib: Box::new(lib) });
         index += 1;
         p = next;
         while p < end && data[p] == 0 {
             p += 1;
         }
-        if p < end && (p - start) % 16 != 0 {
+        if p < end && !(p - start).is_multiple_of(16) {
             return err(
                 p,
                 format!("{}: bytes after a metallib that are neither zero nor a metallib at a 16-byte boundary", loc),
@@ -926,7 +914,7 @@ fn lppm<'a>(data: &'a [u8], base: usize, limit: usize, loc: &str, out: &mut Vec<
             if lib.header.file_size as usize != size {
                 return err(start, format!("LPPM entry {}: metallib size differs from the entry size", i));
             }
-            out.push(Item::Metallib { location: format!("{}lppm[{}]/", loc, i), offset: start, lib });
+            out.push(Item::Metallib { location: format!("{}lppm[{}]/", loc, i), offset: start, lib: Box::new(lib) });
         } else {
             out.push(Item::Other { location: format!("{}lppm[{}]/", loc, i), offset: start, size });
         }

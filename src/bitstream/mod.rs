@@ -325,10 +325,10 @@ impl<'a> Cursor<'a> {
             if self.scope.is_empty() && self.reader.at_end() {
                 return Ok(Entry::EndBlock);
             }
-            if let Some(s) = self.scope.last() {
-                if self.reader.position() >= s.end {
-                    return self.error(format!("block {} runs past its declared length without END_BLOCK", s.block_id));
-                }
+            if let Some(s) = self.scope.last()
+                && self.reader.position() >= s.end
+            {
+                return self.error(format!("block {} runs past its declared length without END_BLOCK", s.block_id));
             }
             let code = self.reader.read(self.code_width)? as u32;
             match code {
@@ -387,11 +387,10 @@ impl<'a> Cursor<'a> {
         if end > self.reader.len_bits() {
             return self.error(format!("block {} of {} words runs past the end of the stream", block_id, words));
         }
-        if let Some(parent) = self.scope.last() {
-            if end > parent.end {
-                return self
-                    .error(format!("block {} runs past the end of its parent block {}", block_id, parent.block_id));
-            }
+        if let Some(parent) = self.scope.last()
+            && end > parent.end
+        {
+            return self.error(format!("block {} runs past the end of its parent block {}", block_id, parent.block_id));
         }
         let mut abbrevs: Vec<Rc<Abbrev>> = self.blockinfo.abbrevs(block_id).to_vec();
         std::mem::swap(&mut abbrevs, &mut self.abbrevs);
@@ -409,10 +408,10 @@ impl<'a> Cursor<'a> {
         if end > self.reader.len_bits() {
             return self.error(format!("block of {} words runs past the end of the stream", words));
         }
-        if let Some(parent) = self.scope.last() {
-            if end > parent.end {
-                return self.error(format!("block runs past the end of its parent block {}", parent.block_id));
-            }
+        if let Some(parent) = self.scope.last()
+            && end > parent.end
+        {
+            return self.error(format!("block runs past the end of its parent block {}", parent.block_id));
         }
         self.reader.seek(end)
     }
@@ -542,10 +541,10 @@ impl<'a> Cursor<'a> {
             }
             i += 1;
         }
-        if let Some(s) = self.scope.last() {
-            if self.reader.position() > s.end {
-                return self.error(format!("record runs past the end of block {}", s.block_id));
-            }
+        if let Some(s) = self.scope.last()
+            && self.reader.position() > s.end
+        {
+            return self.error(format!("record runs past the end of block {}", s.block_id));
         }
         Ok(Record { code: code as u32, ops, blob, abbrev: abbrev_id })
     }
@@ -568,10 +567,10 @@ impl<'a> Cursor<'a> {
         loop {
             // Definitions in BLOCKINFO belong to the block named by the last SETBID, not to BLOCKINFO itself, so
             // they are read here rather than by advance().
-            if let Some(s) = self.scope.last() {
-                if self.reader.position() >= s.end {
-                    return self.error("BLOCKINFO block runs past its declared length without END_BLOCK");
-                }
+            if let Some(s) = self.scope.last()
+                && self.reader.position() >= s.end
+            {
+                return self.error("BLOCKINFO block runs past its declared length without END_BLOCK");
             }
             let code = self.reader.read(self.code_width)? as u32;
             match code {
@@ -634,7 +633,7 @@ mod tests {
         }
         fn emit(&mut self, value: u64, width: u32) {
             for i in 0..width {
-                if self.bit % 8 == 0 {
+                if self.bit.is_multiple_of(8) {
                     self.bytes.push(0);
                 }
                 if (value >> i) & 1 == 1 {
@@ -655,7 +654,7 @@ mod tests {
             }
         }
         fn align32(&mut self) {
-            while self.bit % 32 != 0 {
+            while !self.bit.is_multiple_of(32) {
                 self.emit(0, 1);
             }
         }

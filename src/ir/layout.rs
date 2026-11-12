@@ -260,10 +260,10 @@ impl DataLayout {
 
     /// The pointer specification of an address space (that of address space 0 when it has none).
     pub fn pointer_spec(&self, addrspace: u32) -> &PointerSpec {
-        if addrspace != 0 {
-            if let Ok(i) = self.pointer_specs.binary_search_by_key(&addrspace, |s| s.addrspace) {
-                return &self.pointer_specs[i];
-            }
+        if addrspace != 0
+            && let Ok(i) = self.pointer_specs.binary_search_by_key(&addrspace, |s| s.addrspace)
+        {
+            return &self.pointer_specs[i];
         }
         &self.pointer_specs[0]
     }
@@ -348,7 +348,7 @@ impl DataLayout {
             }
             Type::Vector { scalable: false, .. } => {
                 let bits = self.size_bits(types, t)?;
-                match self.vector_specs.binary_search_by_key(&(bits as u32), |s| s.bits as u32) {
+                match self.vector_specs.binary_search_by_key(&(bits as u32), |s| s.bits) {
                     Ok(i) if bits <= u32::MAX as u64 => {
                         if abi {
                             self.vector_specs[i].abi

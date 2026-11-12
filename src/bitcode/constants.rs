@@ -38,7 +38,7 @@ pub fn mask_words(words: &mut [u64], bits: u32) {
     for w in words.iter_mut().skip(n) {
         *w = 0;
     }
-    if bits % 64 != 0 && n > 0 {
+    if !bits.is_multiple_of(64) && n > 0 {
         words[n - 1] &= (1u64 << (bits % 64)) - 1;
     }
 }
@@ -964,13 +964,7 @@ fn binop_flags(op: BinOp, raw: u64) -> u8 {
             }
             f
         }
-        BinOp::SDiv | BinOp::UDiv | BinOp::LShr | BinOp::AShr => {
-            if raw & 1 != 0 {
-                flags::EXACT
-            } else {
-                0
-            }
-        }
+        BinOp::SDiv | BinOp::UDiv | BinOp::LShr | BinOp::AShr if raw & 1 != 0 => flags::EXACT,
         _ => 0,
     }
 }
@@ -1316,42 +1310,42 @@ fn fold_cast(m: &mut Module, op: CastOp, v: Value, dst: TypeId) -> Option<Value>
         return Some(null_value(m, dst));
     }
     // A cast of a cast.
-    if let Value::Const(c) = v {
-        if let ConstKind::Expr(ConstExpr::Cast { op: inner, value: inner_v }) = m.constant(c).kind.clone() {
-            let src = m.module_value_type(inner_v).unwrap();
-            let mid = m.constant(c).ty;
-            if let Some(new_op) = eliminable_cast_pair(&m.types, inner, op, src, mid, dst) {
-                // `foldMaybeUndesirableCast`: desirable opcodes go through getCast (and may stay an expression).
-                return if supported_cast(new_op) { Some(get_cast(m, new_op, inner_v, dst)) } else { None };
-            }
+    if let Value::Const(c) = v
+        && let ConstKind::Expr(ConstExpr::Cast { op: inner, value: inner_v }) = m.constant(c).kind.clone()
+    {
+        let src = m.module_value_type(inner_v).unwrap();
+        let mid = m.constant(c).ty;
+        if let Some(new_op) = eliminable_cast_pair(&m.types, inner, op, src, mid, dst) {
+            // `foldMaybeUndesirableCast`: desirable opcodes go through getCast (and may stay an expression).
+            return if supported_cast(new_op) { Some(get_cast(m, new_op, inner_v, dst)) } else { None };
         }
     }
     let src = m.module_value_type(v).unwrap();
-    if let (Some(dn), Some(sn)) = (m.types.vector_len(dst), m.types.vector_len(src)) {
-        if dn == sn {
-            let delem = m.types.scalar(dst);
-            if let Some(s) = splat_value(m, v) {
-                let r = fold_maybe_undesirable(m, op, s, delem)?;
-                return Some(splat(m, dst, dn, r));
-            }
-            let elems = vector_elements(m, v)?;
-            let mut out = Vec::new();
-            for e in elems {
-                out.push(fold_maybe_undesirable(m, op, e, delem)?);
-            }
-            return Some(const_vector(m, dst, out));
+    if let (Some(dn), Some(sn)) = (m.types.vector_len(dst), m.types.vector_len(src))
+        && dn == sn
+    {
+        let delem = m.types.scalar(dst);
+        if let Some(s) = splat_value(m, v) {
+            let r = fold_maybe_undesirable(m, op, s, delem)?;
+            return Some(splat(m, dst, dn, r));
         }
+        let elems = vector_elements(m, v)?;
+        let mut out = Vec::new();
+        for e in elems {
+            out.push(fold_maybe_undesirable(m, op, e, delem)?);
+        }
+        return Some(const_vector(m, dst, out));
     }
     match op {
         CastOp::Trunc => {
-            if let Value::Const(c) = v {
-                if let ConstKind::Int(w) = m.constant(c).kind.clone() {
-                    let bits = m.types.int_bits(dst)?;
-                    let mut w = w;
-                    w.truncate(bits.div_ceil(64) as usize);
-                    mask_words(&mut w, bits);
-                    return Some(Value::Const(m.intern_const(Constant { ty: dst, kind: ConstKind::Int(w) })));
-                }
+            if let Value::Const(c) = v
+                && let ConstKind::Int(w) = m.constant(c).kind.clone()
+            {
+                let bits = m.types.int_bits(dst)?;
+                let mut w = w;
+                w.truncate(bits.div_ceil(64) as usize);
+                mask_words(&mut w, bits);
+                return Some(Value::Const(m.intern_const(Constant { ty: dst, kind: ConstKind::Int(w) })));
             }
             None
         }
@@ -1370,10 +1364,10 @@ fn fold_bitcast(m: &mut Module, v: Value, dst: TypeId) -> Option<Value> {
     if src == dst {
         return Some(v);
     }
-    if is_all_ones(m, v) {
-        if let Some(a) = all_ones(m, dst) {
-            return Some(a);
-        }
+    if is_all_ones(m, v)
+        && let Some(a) = all_ones(m, dst)
+    {
+        return Some(a);
     }
     let c = match v {
         Value::Const(c) => c,

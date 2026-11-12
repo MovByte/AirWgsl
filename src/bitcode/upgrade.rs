@@ -41,16 +41,13 @@ fn check_unimplemented_upgrades(r: &Reader) -> Result<()> {
 fn module_flag(m: &Module, key: &str) -> Option<MdId> {
     let flags = m.named_metadata.iter().find(|n| n.name == "llvm.module.flags")?;
     for &op in &flags.ops {
-        if let Metadata::Tuple { ops, .. } = m.md(op) {
-            if ops.len() >= 3 {
-                if let Some(Some(k)) = ops.get(1) {
-                    if let Metadata::String(s) = m.md(*k) {
-                        if s.as_slice() == key.as_bytes() {
-                            return ops[2];
-                        }
-                    }
-                }
-            }
+        if let Metadata::Tuple { ops, .. } = m.md(op)
+            && ops.len() >= 3
+            && let Some(Some(k)) = ops.get(1)
+            && let Metadata::String(s) = m.md(*k)
+            && s.as_slice() == key.as_bytes()
+        {
+            return ops[2];
         }
     }
     None
@@ -65,10 +62,10 @@ fn incompatible(m: &Module, ty: TypeId, set: &AttrSet) -> Vec<AttrKind> {
     }
     if !t.is_int_or_int_vector(ty) {
         out.push(AttrKind::Range);
-    } else if let Some(Attribute::Range(_, cr)) = set.get(AttrKind::Range) {
-        if cr.bits != t.scalar_bits(ty) {
-            out.push(AttrKind::Range);
-        }
+    } else if let Some(Attribute::Range(_, cr)) = set.get(AttrKind::Range)
+        && cr.bits != t.scalar_bits(ty)
+    {
+        out.push(AttrKind::Range);
     }
     if !t.is_ptr(ty) {
         out.extend([
@@ -137,10 +134,10 @@ fn upgrade_function_attributes(r: &mut Reader, f: usize) -> Result<()> {
             let call_attrs = match &m.functions[f].insts[i].op {
                 Op::Call { attrs, callee, .. } => {
                     // Constrained FP intrinsics keep strictfp.
-                    if let Value::Global(GlobalId::Function(c)) = callee {
-                        if m.functions[*c as usize].common.name.starts_with("llvm.experimental.constrained.") {
-                            continue;
-                        }
+                    if let Value::Global(GlobalId::Function(c)) = callee
+                        && m.functions[*c as usize].common.name.starts_with("llvm.experimental.constrained.")
+                    {
+                        continue;
                     }
                     attrs.clone()
                 }
@@ -265,10 +262,10 @@ fn upgrade_global_ctors(r: &mut Reader) -> Result<()> {
         if g.common.name != "llvm.global_ctors" && g.common.name != "llvm.global_dtors" || g.initializer.is_none() {
             continue;
         }
-        if let Type::Array { elem, .. } = r.m.types.get(g.value_type) {
-            if r.m.types.struct_elems(*elem).map(|e| e.len()) == Some(2) {
-                return r.unsupported("two-field llvm.global_ctors (its upgrade is not implemented)");
-            }
+        if let Type::Array { elem, .. } = r.m.types.get(g.value_type)
+            && r.m.types.struct_elems(*elem).map(|e| e.len()) == Some(2)
+        {
+            return r.unsupported("two-field llvm.global_ctors (its upgrade is not implemented)");
         }
     }
     Ok(())
@@ -279,11 +276,11 @@ fn linker_options(r: &mut Reader) {
     if r.m.named_metadata.iter().any(|n| n.name == "llvm.linker.options") {
         return;
     }
-    if let Some(v) = module_flag(&r.m, "Linker Options") {
-        if let Metadata::Tuple { ops, .. } = r.m.md(v).clone() {
-            let nodes: Vec<MdId> = ops.into_iter().flatten().collect();
-            r.m.named_metadata.push(NamedMetadata { name: "llvm.linker.options".into(), ops: nodes });
-        }
+    if let Some(v) = module_flag(&r.m, "Linker Options")
+        && let Metadata::Tuple { ops, .. } = r.m.md(v).clone()
+    {
+        let nodes: Vec<MdId> = ops.into_iter().flatten().collect();
+        r.m.named_metadata.push(NamedMetadata { name: "llvm.linker.options".into(), ops: nodes });
     }
 }
 
@@ -380,24 +377,24 @@ fn upgrade_module_flags(r: &mut Reader) {
                 }
             }
             b"Objective-C Image Info Section" => {
-                if let Some(Metadata::String(v)) = node[2].map(|x| m.md(x).clone()) {
-                    if v.contains(&b' ') {
-                        let joined: Vec<u8> = v.split(|c| *c == b' ').flatten().copied().collect();
-                        let s = m.intern_md(Metadata::String(joined));
-                        replacement = Some(set_op(m, vec![node[0], node[1], Some(s)]));
-                    }
+                if let Some(Metadata::String(v)) = node[2].map(|x| m.md(x).clone())
+                    && v.contains(&b' ')
+                {
+                    let joined: Vec<u8> = v.split(|c| *c == b' ').flatten().copied().collect();
+                    let s = m.intern_md(Metadata::String(joined));
+                    replacement = Some(set_op(m, vec![node[0], node[1], Some(s)]));
                 }
             }
             b"Objective-C Garbage Collection" => {
-                if let Some((ty, val)) = const_int(m, node[2]) {
-                    if ty != i8t {
-                        if val & 0xff != val {
-                            swift = Some(((val & 0xff00) >> 8, (val & 0xff00_0000) >> 24, (val & 0xff_0000) >> 16));
-                        }
-                        let b = int_md(m, i32t, 1);
-                        let v = int_md(m, i8t, val & 0xff);
-                        replacement = Some(set_op(m, vec![Some(b), node[1], Some(v)]));
+                if let Some((ty, val)) = const_int(m, node[2])
+                    && ty != i8t
+                {
+                    if val & 0xff != val {
+                        swift = Some(((val & 0xff00) >> 8, (val & 0xff00_0000) >> 24, (val & 0xff_0000) >> 16));
                     }
+                    let b = int_md(m, i32t, 1);
+                    let v = int_md(m, i8t, val & 0xff);
+                    replacement = Some(set_op(m, vec![Some(b), node[1], Some(v)]));
                 }
             }
             b"amdgpu_code_object_version" => {
@@ -405,11 +402,11 @@ fn upgrade_module_flags(r: &mut Reader) {
                 replacement = Some(set_op(m, vec![node[0], Some(s), node[2]]));
             }
             _ => {
-                if id.as_slice() == b"branch-target-enforcement" || id.starts_with(b"sign-return-address") {
-                    if let Some((_, 1)) = const_int(m, node[0]) {
-                        let b = int_md(m, i32t, 8);
-                        replacement = Some(set_op(m, vec![Some(b), node[1], node[2]]));
-                    }
+                if (id.as_slice() == b"branch-target-enforcement" || id.starts_with(b"sign-return-address"))
+                    && let Some((_, 1)) = const_int(m, node[0])
+                {
+                    let b = int_md(m, i32t, 8);
+                    replacement = Some(set_op(m, vec![Some(b), node[1], node[2]]));
                 }
             }
         }

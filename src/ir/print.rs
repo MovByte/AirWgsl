@@ -189,7 +189,7 @@ pub fn int_decimal(words: &[u64], bits: u32) -> String {
             *x = v;
             carry = c as u64;
         }
-        if bits % 64 != 0 {
+        if !bits.is_multiple_of(64) {
             let last = w.len() - 1;
             w[last] &= (1u64 << (bits % 64)) - 1;
         }
@@ -352,7 +352,7 @@ fn apfloat_to_string(
     }
     // AdjustToPrecision on the integer: drop the decimal digits that cannot matter.
     let bits = sig.active_bits();
-    let bits_required = (format_precision * 196 + 58) / 59;
+    let bits_required = (format_precision * 196).div_ceil(59);
     if bits > bits_required {
         let tens = (bits - bits_required) * 59 / 196;
         if tens > 0 {
@@ -386,11 +386,12 @@ fn apfloat_to_string(
             buffer.drain(..first);
         } else {
             let mut carried_all = true;
-            for i in first..buffer.len() {
-                if buffer[i] == b'9' {
+            let start = first;
+            for digit in &mut buffer[start..] {
+                if *digit == b'9' {
                     first += 1;
                 } else {
-                    buffer[i] += 1;
+                    *digit += 1;
                     carried_all = false;
                     break;
                 }
@@ -458,10 +459,10 @@ pub fn float_text(kind: FloatKind, bits: u128) -> String {
                     };
                     apfloat_to_string(negative, e, sig, mbits + 1, 6)
                 };
-                if let Ok(back) = s.parse::<f64>() {
-                    if back == value {
-                        return s;
-                    }
+                if let Ok(back) = s.parse::<f64>()
+                    && back == value
+                {
+                    return s;
                 }
             }
             // Hexadecimal, as a double.
@@ -608,14 +609,14 @@ impl<'m> Printer<'m> {
         for b in &f.blocks {
             for &i in &b.insts {
                 let inst = f.inst(i);
-                if let Op::Call { callee: Value::Global(GlobalId::Function(c)), args, .. } = &inst.op {
-                    if Self::is_intrinsic_name(&m.functions[*c as usize].common.name) {
-                        for a in args {
-                            if let Value::Metadata(md) = a {
-                                if matches!(m.md(*md), Metadata::Tuple { .. }) {
-                                    self.md_slot(*md);
-                                }
-                            }
+                if let Op::Call { callee: Value::Global(GlobalId::Function(c)), args, .. } = &inst.op
+                    && Self::is_intrinsic_name(&m.functions[*c as usize].common.name)
+                {
+                    for a in args {
+                        if let Value::Metadata(md) = a
+                            && matches!(m.md(*md), Metadata::Tuple { .. })
+                        {
+                            self.md_slot(*md);
                         }
                     }
                 }
@@ -668,24 +669,24 @@ impl<'m> Printer<'m> {
         for g in &m.globals {
             tf.ty(g.value_type);
             if let Some(i) = g.initializer {
-                tf.value(i, None);
+                tf.value(i);
             }
         }
         for a in &m.aliases {
             tf.ty(a.value_type);
-            tf.value(a.aliasee, None);
+            tf.value(a.aliasee);
         }
         for a in &m.ifuncs {
             tf.ty(a.value_type);
         }
-        for (fi, f) in m.functions.iter().enumerate() {
+        for f in &m.functions {
             tf.ty(f.ty);
             tf.attrs(&f.attrs);
             let ptr0 = m.types.iter().find(|(_, t)| matches!(t, Type::Ptr(0))).map(|(i, _)| i);
             if f.prefix.is_some() || f.prologue.is_some() || f.personality.is_some() {
                 for v in [f.personality, f.prefix, f.prologue] {
                     match v {
-                        Some(v) => tf.value(v, Some(fi)),
+                        Some(v) => tf.value(v),
                         // Absent hung-off operands are `ptr null` placeholders.
                         None => {
                             if let Some(p) = ptr0 {
@@ -701,7 +702,7 @@ impl<'m> Printer<'m> {
                     tf.ty(inst.ty);
                     for op in inst.op.operands() {
                         if !matches!(op, Value::Inst(_) | Value::Arg(_)) {
-                            tf.value(op, Some(fi));
+                            tf.value(op);
                         }
                     }
                     match &inst.op {
@@ -1090,12 +1091,12 @@ impl<'m> Printer<'m> {
                 }
             }
             ConstKind::Vector(e) => {
-                if e.iter().all(|x| *x == e[0]) {
-                    if let Value::Const(x) = e[0] {
-                        let k = &self.m.constant(x).kind;
-                        if matches!(k, ConstKind::Int(_) | ConstKind::Float(_)) {
-                            return Some((elem, k.clone()));
-                        }
+                if e.iter().all(|x| *x == e[0])
+                    && let Value::Const(x) = e[0]
+                {
+                    let k = &self.m.constant(x).kind;
+                    if matches!(k, ConstKind::Int(_) | ConstKind::Float(_)) {
+                        return Some((elem, k.clone()));
                     }
                 }
                 None
@@ -1842,9 +1843,8 @@ impl<'m> Printer<'m> {
             }
         }
         self.out = out;
-        for bi in 0..f.blocks.len() {
+        for (bi, b) in f.blocks.iter().enumerate() {
             let mut out = std::mem::take(&mut self.out);
-            let b = &f.blocks[bi];
             let entry = bi == 0;
             if let Some(n) = &b.name {
                 out.push('\n');
@@ -2036,10 +2036,8 @@ impl<'m> Printer<'m> {
                             out.push_str(" exact");
                         }
                     }
-                    BinOp::Or => {
-                        if fl & flags::DISJOINT != 0 {
-                            out.push_str(" disjoint");
-                        }
+                    BinOp::Or if fl & flags::DISJOINT != 0 => {
+                        out.push_str(" disjoint");
                     }
                     _ => {}
                 }
@@ -2412,19 +2410,19 @@ impl<'m> TypeFinder<'m> {
         }
     }
 
-    fn value(&mut self, v: Value, f: Option<usize>) {
+    fn value(&mut self, v: Value) {
         match v {
             Value::Metadata(md) => match self.m.md(md) {
                 Metadata::Tuple { .. } => self.md(md),
                 Metadata::Value { value, .. } | Metadata::Local { value, .. } => {
                     let value = *value;
-                    self.value(value, f)
+                    self.value(value)
                 }
                 Metadata::ArgList(items) => {
                     for it in items.clone() {
                         if let Metadata::Value { value, .. } | Metadata::Local { value, .. } = self.m.md(it) {
                             let value = *value;
-                            self.value(value, f);
+                            self.value(value);
                         }
                     }
                 }
@@ -2450,7 +2448,7 @@ impl<'m> TypeFinder<'m> {
                     _ => vec![],
                 };
                 for o in ops {
-                    self.value(o, f);
+                    self.value(o);
                 }
             }
             // Inline asm is a value of pointer type with no operands to walk.
@@ -2490,13 +2488,13 @@ impl<'m> TypeFinder<'m> {
                 }
                 Metadata::Value { value, .. } => {
                     let value = *value;
-                    self.value(value, None);
+                    self.value(value);
                 }
                 Metadata::ArgList(items) => {
                     for it in items.clone() {
                         if let Metadata::Value { value, .. } | Metadata::Local { value, .. } = self.m.md(it) {
                             let value = *value;
-                            self.value(value, None);
+                            self.value(value);
                         }
                     }
                 }

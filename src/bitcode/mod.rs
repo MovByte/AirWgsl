@@ -478,21 +478,20 @@ impl<'a> Reader<'a> {
                     METADATA_KIND_BLOCK_ID => self.read_metadata_kinds()?,
                     FUNCTION_BLOCK_ID => {
                         self.resolve_datalayout()?;
-                        if self.function_blocks.is_empty() {
-                            if let Some(off) = self.vst_offset {
-                                if !self.seen_vst {
-                                    let back = self.cur.position();
-                                    // The ENTER_SUBBLOCK was read; return to the start of the block afterwards.
-                                    self.cur.seek(off)?;
-                                    match self.cur.advance()? {
-                                        Entry::SubBlock(VALUE_SYMTAB_BLOCK_ID) => {}
-                                        _ => return self.malformed("VSTOFFSET does not point at a value symbol table"),
-                                    }
-                                    self.read_module_vst(Some(off))?;
-                                    self.seen_vst = true;
-                                    self.cur.seek(back)?;
-                                }
+                        if self.function_blocks.is_empty()
+                            && let Some(off) = self.vst_offset
+                            && !self.seen_vst
+                        {
+                            let back = self.cur.position();
+                            // The ENTER_SUBBLOCK was read; return to the start of the block afterwards.
+                            self.cur.seek(off)?;
+                            match self.cur.advance()? {
+                                Entry::SubBlock(VALUE_SYMTAB_BLOCK_ID) => {}
+                                _ => return self.malformed("VSTOFFSET does not point at a value symbol table"),
                             }
+                            self.read_module_vst(Some(off))?;
+                            self.seen_vst = true;
+                            self.cur.seek(back)?;
                         }
                         // The function this block belongs to: by the symbol table's offsets, or else the next function
                         // with a body in module order.

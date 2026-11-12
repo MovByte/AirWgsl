@@ -7,7 +7,7 @@ use crate::ir::{Type, TypeId};
 
 impl<'a> Reader<'a> {
     /// A type id used while reading the table: defined, or a forward reference that must be an identified struct.
-    fn type_or_forward(&mut self, id: u64, forward_structs: &mut Vec<bool>) -> Result<Option<TypeId>> {
+    fn type_or_forward(&mut self, id: u64, forward_structs: &mut [bool]) -> Result<Option<TypeId>> {
         let i = id as usize;
         if i >= self.bc_types.len() {
             return Ok(None);
