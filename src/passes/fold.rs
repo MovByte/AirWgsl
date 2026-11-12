@@ -75,6 +75,7 @@ pub fn fold(m: &mut Module, f: usize) -> Result<bool, Refusal> {
             round = true;
         }
         round |= branches(m, f);
+        round |= fill_stores(m, f, &mut mem);
         if remove_unreachable_blocks(&mut m.functions[f]) {
             round = true;
         }
@@ -266,6 +267,89 @@ fn simplify(m: &mut Module, f: usize, i: InstId) -> Option<Value> {
             let zero = indices.iter().all(|&x| const_int(m, x) == Some(0));
             (zero && pt == inst.ty).then_some(*ptr)
         }
+        _ => None,
+    }
+}
+
+/// `llvm.memcpy` from a constant global, or `llvm.memset` with a constant byte, that fills a whole stack object of a
+/// scalar or vector type whose bytes are all value bits becomes a store of that value: the bytes written are the
+/// same. The source bytes must be defined and hold no pointer (so the typed value carries them exactly). Returns
+/// whether any changed.
+fn fill_stores(m: &mut Module, f: usize, mem: &mut Memory) -> bool {
+    use crate::interp::memory::Layout;
+    use crate::ir::Type;
+    let Ok(dl) = crate::ir::layout::DataLayout::parse(&m.datalayout) else { return false };
+    let mut changed = false;
+    let calls: Vec<InstId> = m.functions[f].blocks.iter().flat_map(|b| b.insts.iter().copied()).collect();
+    for i in calls {
+        let Op::Call { callee: Value::Global(GlobalId::Function(c)), args, .. } = &m.functions[f].inst(i).op else {
+            continue;
+        };
+        let name = m.functions[*c as usize].common.name.clone();
+        let args = args.clone();
+        let memcpy = name.starts_with("llvm.memcpy.") && !name.contains(".inline");
+        let memset = name.starts_with("llvm.memset.") && !name.contains(".inline");
+        if !(memcpy || memset) || const_int(m, args[3]) != Some(0) {
+            continue;
+        }
+        let Value::Inst(a) = args[0] else { continue };
+        let Op::Alloca { allocated: t, count, align, .. } = m.functions[f].inst(a).op.clone() else { continue };
+        if const_int(m, count) != Some(1) {
+            continue;
+        }
+        let byte_exact = |t: crate::ir::TypeId| match m.types.get(m.types.scalar(t)) {
+            Type::Int(w) => w % 8 == 0,
+            Type::Half | Type::BFloat | Type::Float | Type::Double => true,
+            _ => false,
+        };
+        if !byte_exact(t) || matches!(m.types.get(t), Type::Ptr(_)) {
+            continue;
+        }
+        let Some(size) = dl.store_size(&m.types, t) else { continue };
+        if const_int(m, args[2]) != Some(size as u128) {
+            continue;
+        }
+        let bytes: Vec<crate::interp::Byte> = if memset {
+            let Some(v) = const_int(m, args[1]) else { continue };
+            vec![crate::interp::Byte::data(v as u8); size as usize]
+        } else {
+            if !constant_object(m, args[1]) || !address_free(m, args[1]) {
+                continue;
+            }
+            // The source bytes, through the interpreter's view of the constant pointer.
+            let Some((g, off)) = global_offset(m, &dl, args[1]) else { continue };
+            let Ok(r) = interp::global_region(m, g, mem) else { continue };
+            let region = &mem.region(r).bytes;
+            let (lo, hi) = (off as usize, off as usize + size as usize);
+            if off < 0 || hi > region.len() {
+                continue;
+            }
+            region[lo..hi].to_vec()
+        };
+        if !bytes.iter().all(|b| b.is_plain()) {
+            continue;
+        }
+        let layout = Layout { dl: &dl, types: &m.types };
+        let Ok(v) = layout.decode(t, &bytes) else { continue };
+        let Ok(cv) = values::to_const(m, mem, t, &v) else { continue };
+        m.functions[f].insts[i.0 as usize].op =
+            Op::Store { value: cv, ptr: Value::Inst(a), align, volatile: false, atomic: None };
+        m.functions[f].insts[i.0 as usize].ty = m.types.void();
+        changed = true;
+    }
+    changed
+}
+
+/// The global and byte offset a constant pointer names (`@g`, or `getelementptr` with constant indices on it).
+fn global_offset(m: &Module, dl: &crate::ir::layout::DataLayout, p: Value) -> Option<(u32, i128)> {
+    match p {
+        Value::Global(GlobalId::Var(g)) => Some((g, 0)),
+        Value::Const(c) => match &m.constant(c).kind {
+            ConstKind::Expr(ConstExpr::Gep { source, ptr: Value::Global(GlobalId::Var(g)), indices, .. }) => {
+                Some((*g, super::sroa::gep_offset(m, dl, *source, indices)?))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }

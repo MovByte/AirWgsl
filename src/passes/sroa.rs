@@ -295,7 +295,8 @@ fn rewrite(m: &mut Module, dl: &DataLayout, f: usize, a: InstId, plan: Plan) {
     let i8t = m.types.int(8);
     let i64t = m.types.int(64);
     let pty = m.types.ptr(plan.addrspace);
-    let one = int_const(m, i64t, 1);
+    let i32t = m.types.int(32);
+    let one = int_const(m, i32t, 1);
     // The new objects.
     let mut objects = Vec::new();
     for &(lo, hi) in &plan.parts {
