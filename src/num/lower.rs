@@ -375,7 +375,7 @@ fn lower_dot(c: &mut Ctx, b: &[String], tys: &[Ty], flags: FastMath) -> R<Out> {
         let terms: Vec<String> = (0..n).map(|i| format!("({{{}}} * {{{}}})", 2 * i, 2 * i + 1)).collect();
         let pattern = terms.join(" + ");
         let ops: Vec<String> = (0..n).flat_map(|i| [lane(&b[0], ty, i), lane(&b[1], ty, i)]).collect();
-        native_lane_dyn(c, s, &pattern, &ops)?
+        native_lane(c, s, &pattern, &ops, &[])?
     } else {
         let mul = format!("nm_{}_mul", float_scalar(s));
         let add = format!("nm_{}_add", float_scalar(s));
@@ -388,11 +388,6 @@ fn lower_dot(c: &mut Ctx, b: &[String], tys: &[Ty], flags: FastMath) -> R<Out> {
         acc
     };
     Ok(out(expr, rule))
-}
-
-/// native_lane for patterns built at run time.
-fn native_lane_dyn(c: &mut Ctx, scalar: Scalar, pattern: &str, ops: &[String]) -> R<String> {
-    native_lane(c, scalar, pattern, ops, &[])
 }
 
 /// fadd, fsub, fmul, fdiv, frem: rows add, sub, mul, div (recip for a 1.0 numerator), fmod.
@@ -826,7 +821,7 @@ fn lower_call(c: &mut Ctx, name: &str, b: &[String], tys: &[Ty], ret: Option<Ty>
         return lower_air(c, rest, b, tys, ret, flags);
     }
     if let Some(rest) = name.strip_prefix("llvm.") {
-        return lower_llvm(c, rest, b, tys, ret, flags);
+        return lower_llvm(c, rest, b, tys, flags);
     }
     Err(not_numeric(c))
 }
@@ -930,7 +925,7 @@ fn exact_native() -> Rule {
 }
 
 /// llvm.* intrinsics with numeric semantics (the corpus's non-air callees).
-fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], ret: Option<Ty>, flags: FastMath) -> R<Out> {
+fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], flags: FastMath) -> R<Out> {
     let parts: Vec<&str> = rest.split('.').collect();
     let ty = tys[0];
     let suffix = parts.last().copied().unwrap_or("");
@@ -962,7 +957,6 @@ fn lower_llvm(c: &mut Ctx, rest: &str, b: &[String], tys: &[Ty], ret: Option<Ty>
             _ => Err(not_numeric(c)),
         };
     }
-    let _ = ret;
     let s = ty.scalar;
     let n = s.bits();
     match name.as_str() {
