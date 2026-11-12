@@ -24,11 +24,11 @@ pub mod names;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::{
-    Access, AirModule, Argument, Buffer, EntryPoint, IndirectArgument, Location, Member, Role, Slot, StructInfo,
+    Access, AirModule, Argument, Buffer, EntryPoint, IndirectArgument, Location, Member, Role, Slot, Stage, StructInfo,
 };
 use crate::api::{
-    ArgumentReflection, Location as RefusalLocation, NO_TYPE, Refusal, RefusalKind, StageInputDescriptor,
-    StageReflection, StructMemberReflection, TypeReflection, VertexDescriptor,
+    ArgumentReflection, BuiltinReflection, Location as RefusalLocation, NO_TYPE, Refusal, RefusalKind,
+    StageInputDescriptor, StageReflection, StructMemberReflection, TypeReflection, VertexDescriptor,
 };
 use names::data_type as dt;
 
@@ -44,6 +44,50 @@ pub mod argument_type {
     pub const PRIMITIVE_ACCELERATION_STRUCTURE: u64 = 25;
     pub const INSTANCE_ACCELERATION_STRUCTURE: u64 = 26;
     pub const INTERSECTION_FUNCTION_TABLE: u64 = 27;
+}
+
+/// The `MTLArgumentType` of every built-in argument (measurement reflect-private, every case).
+pub const BUILTIN_ARGUMENT_TYPE: u64 = 15;
+
+/// The AIR address spaces a pointer's reflection records (`isConstantBuffer` is the second).
+pub mod address_space {
+    pub const DEVICE: u32 = 1;
+    pub const CONSTANT: u32 = 2;
+    pub const THREADGROUP: u32 = 3;
+}
+
+/// The `MTLBuiltInArgumentType` Metal's reflection lists a built-in argument with, by AIR key: `Some(value)`, or `None`
+/// for a built-in the list omits. Measured on an Apple M4 (measurement reflect-private) for every kernel and vertex
+/// built-in the front end writes; the values are those of 21H461's `MTLBuiltInArgumentTypeString` table (Metal
+/// 0x187b31604 indexes 25 names at 0x1e642d1a8: 0 Invalid, 1 VertexID ... 20 ThreadsPerSimdgroup). A key that is not
+/// listed here is not measured.
+pub fn builtin_type(key: &str) -> Option<Option<u64>> {
+    Some(match key {
+        "air.vertex_id" => Some(1),
+        "air.instance_id" => Some(2),
+        "air.base_vertex" => Some(3),
+        "air.base_instance" => Some(4),
+        "air.thread_position_in_grid" => Some(5),
+        "air.threads_per_grid" => Some(6),
+        "air.thread_position_in_threadgroup" => Some(7),
+        "air.thread_index_in_threadgroup" => Some(8),
+        "air.threads_per_threadgroup" => Some(9),
+        "air.threadgroup_position_in_grid" => Some(10),
+        "air.threadgroups_per_grid" => Some(11),
+        "air.stage_in_grid_origin" => Some(15),
+        "air.stage_in_grid_size" => Some(16),
+        "air.thread_index_in_quadgroup" => Some(17),
+        "air.thread_index_in_simdgroup" => Some(18),
+        "air.threads_per_simdgroup" => Some(20),
+        "air.simdgroup_index_in_threadgroup"
+        | "air.simdgroups_per_threadgroup"
+        | "air.dispatch_simdgroups_per_threadgroup"
+        | "air.quadgroup_index_in_threadgroup"
+        | "air.quadgroups_per_threadgroup"
+        | "air.dispatch_quadgroups_per_threadgroup"
+        | "air.dispatch_threads_per_threadgroup" => None,
+        _ => return None,
+    })
 }
 
 /// `MTLBindingAccess` values.
@@ -256,6 +300,8 @@ impl<'a> Builder<'a> {
                         access: buffer_access(b.access),
                         alignment,
                         data_size: arg.type_size.unwrap_or(0) as u64,
+                        // Measured for device and constant pointers in an argument buffer (reflect-private, bindings).
+                        address_space: b.address_space.unwrap_or(0),
                         ..Default::default()
                     });
                     if let Some(info) = &b.struct_info {
@@ -333,10 +379,18 @@ impl<'a> Builder<'a> {
                 if threadgroup {
                     r.threadgroup_memory_alignment = align;
                     r.threadgroup_memory_data_size = size;
+                    // The pointee's data type, a struct (atomics included: the front end gives them struct type
+                    // information) as MTLDataTypeStruct (measurement reflect-private, case bindings).
+                    r.threadgroup_memory_data_type = if b.struct_info.is_some() {
+                        dt::STRUCT
+                    } else {
+                        self.pointee_data_type(self.type_name(arg)?, arg)?
+                    };
                     return Ok(Some(r));
                 }
                 r.buffer_alignment = align;
                 r.buffer_data_size = size;
+                r.buffer_address_space = b.address_space.unwrap_or(0);
                 let element_data_type;
                 let mut element_struct = None;
                 if let Some(info) = &b.struct_info {
@@ -355,6 +409,7 @@ impl<'a> Builder<'a> {
                     data_size: size,
                     element_is_argument_buffer: indirect,
                     element_type: NO_TYPE,
+                    address_space: r.buffer_address_space,
                     ..Default::default()
                 });
                 if let Some(info) = element_struct {
@@ -555,6 +610,8 @@ pub fn stage(
                     .iter()
                     .enumerate()
                     .any(|(i, a)| a.0 != VERTEX_FORMAT_INVALID && a.1 == buffer && read.contains(&(i as u64)));
+            // The described buffers are device buffers (isConstantBuffer 0, measurement reflect-private, cases
+            // vertex-descriptor and stage-input-descriptor).
             let pointer = b.push(TypeReflection {
                 data_type: dt::POINTER,
                 element_data_type: dt::STRUCT,
@@ -562,6 +619,7 @@ pub fn stage(
                 alignment: VERTEX_BUFFER_ALIGNMENT,
                 data_size: stride,
                 element_type: NO_TYPE,
+                address_space: address_space::DEVICE,
                 ..Default::default()
             });
             arguments.push(ArgumentReflection {
@@ -577,6 +635,7 @@ pub fn stage(
                 buffer_struct_type: NO_TYPE,
                 buffer_pointer_type: pointer,
                 buffer_indirect_argument_type: NO_TYPE,
+                buffer_address_space: address_space::DEVICE,
                 ..Default::default()
             });
         }
@@ -586,7 +645,37 @@ pub fn stage(
             arguments.push(r);
         }
     }
-    Ok(StageReflection { function_type: entry.stage.function_type(), arguments, types: b.types })
+    let builtins = b.builtins()?;
+    Ok(StageReflection { function_type: entry.stage.function_type(), arguments, types: b.types, builtins })
+}
+
+impl Builder<'_> {
+    /// The built-in arguments of a kernel or a vertex function, as Metal's reflection lists them (measurement
+    /// reflect-private): in declaration order, each with type 15, access 0 (read only) and index 0, active when the
+    /// function reads it, and the argument type's data type; built-ins without an `MTLBuiltInArgumentType` are left
+    /// out. `None` for other stages (Metal keeps no list of a fragment function's built-ins) and for a function with a
+    /// built-in that is not measured.
+    fn builtins(&self) -> Result<Option<Vec<BuiltinReflection>>, Refusal> {
+        if !matches!(self.entry.stage, Stage::Kernel | Stage::Vertex) {
+            return Ok(None);
+        }
+        let mut out = Vec::new();
+        for arg in &self.entry.arguments {
+            let Role::Builtin { key, .. } = &arg.role else { continue };
+            let Some(listed) = builtin_type(key) else { return Ok(None) };
+            let Some(builtin_type) = listed else { continue };
+            out.push(BuiltinReflection {
+                name: arg.name.clone().unwrap_or_default(),
+                r#type: BUILTIN_ARGUMENT_TYPE,
+                access: access::READ_ONLY,
+                active: !arg.unused && !self.inputs.unused_arguments.contains(&arg.position),
+                index: 0,
+                data_type: self.data(self.type_name(arg)?)?,
+                builtin_type,
+            });
+        }
+        Ok(Some(out))
+    }
 }
 
 #[cfg(test)]
@@ -611,6 +700,60 @@ mod tests {
         assert_eq!((tex.r#type, tex.index, tex.texture_type, tex.texture_data_type), (2, 3, 2, 16));
         let s = &r.arguments[2];
         assert_eq!((s.r#type, s.index), (3, 1));
+        // The constant buffer's address space, on the binding and its pointer type.
+        assert_eq!((buf.buffer_address_space, p.address_space), (2, 2));
+        // `uint i [[thread_position_in_grid]]`: MTLBuiltInArgumentThreadPositionInGrid, MTLDataTypeUInt.
+        let builtin = BuiltinReflection {
+            name: "i".into(),
+            r#type: 15,
+            access: 0,
+            active: true,
+            index: 0,
+            data_type: 33,
+            builtin_type: 5,
+        };
+        assert_eq!(r.builtins, Some(vec![builtin]));
+    }
+
+    /// Threadgroup memory reflects its element's data type; built-ins without an `MTLBuiltInArgumentType` are left
+    /// out, an unused one is inactive, and a function with a built-in that is not measured reports none.
+    #[test]
+    fn builtins_and_threadgroup_memory() {
+        let tg = [
+            "#0",
+            "air.buffer",
+            "air.location_index",
+            "#0",
+            "#1",
+            "air.read_write",
+            "air.address_space",
+            "#3",
+            "air.arg_type_size",
+            "#16",
+            "air.arg_type_align_size",
+            "#16",
+            "air.arg_type_name",
+            "float4",
+            "air.arg_name",
+            "t",
+        ];
+        let lid = ["#1", "air.thread_index_in_threadgroup", "air.arg_type_name", "ushort", "air.arg_name", "l"];
+        let sg = ["#2", "air.simdgroup_index_in_threadgroup", "air.arg_type_name", "uint", "air.arg_name", "s"];
+        let records = vec![tg.to_vec(), lid.to_vec(), sg.to_vec()];
+        let a = AirModule::decode(crate::air::tests::entry("air.kernel", &[], &records)).unwrap();
+        let inputs = Inputs { unused_arguments: [1].into_iter().collect(), ..Default::default() };
+        let r = stage(&a, a.entry_point("k").unwrap(), &inputs, StageInput::None).unwrap();
+        let t = &r.arguments[0];
+        assert_eq!((t.r#type, t.threadgroup_memory_data_type, t.buffer_address_space), (1, 6, 0));
+        let builtins = r.builtins.unwrap();
+        assert_eq!(builtins.len(), 1, "{builtins:?}");
+        assert_eq!((builtins[0].name.as_str(), builtins[0].active), ("l", false));
+        assert_eq!((builtins[0].builtin_type, builtins[0].data_type), (8, 41));
+
+        let patch = ["#0", "air.patch_id", "air.arg_type_name", "uint", "air.arg_name", "p"];
+        let a = AirModule::decode(crate::air::tests::entry("air.kernel", &[], &[patch.to_vec()])).unwrap();
+        let r = stage(&a, a.entry_point("k").unwrap(), &Inputs::default(), StageInput::None).unwrap();
+        assert_eq!(r.builtins, None);
     }
 
     /// The vertex-descriptor buffers of a measured case: `vertex float4 v1(In in [[stage_in]], constant float *u

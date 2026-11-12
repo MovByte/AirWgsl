@@ -538,6 +538,27 @@ pub struct StageReflection {
     pub function_type: u64,
     pub arguments: Vec<ArgumentReflection>,
     pub types: Vec<TypeReflection>,
+    /// The built-in arguments Metal's reflection lists for the stage (`builtInArguments` of a kernel,
+    /// `vertexBuiltInArguments` of a vertex function), in the order the function declares them. `None` when not
+    /// reported: a stage Metal keeps no list for, or one with a built-in whose `MTLBuiltInArgument` is not measured.
+    pub builtins: Option<Vec<BuiltinReflection>>,
+}
+
+/// One `MTLBuiltInArgument`: the values of `-[MTLBuiltInArgument initWithName:type:access:active:index:dataType:
+/// builtInType:]`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuiltinReflection {
+    pub name: String,
+    /// `MTLArgumentType` (15 for every built-in, measured).
+    pub r#type: u64,
+    /// `MTLBindingAccess`.
+    pub access: u64,
+    pub active: bool,
+    pub index: u64,
+    /// `MTLDataType` of the argument.
+    pub data_type: u64,
+    /// `MTLBuiltInArgumentType`.
+    pub builtin_type: u64,
 }
 
 /// One `MTLArgument`.
@@ -569,11 +590,16 @@ pub struct ArgumentReflection {
     pub indirect_constant_data_size: u64,
     /// `MTLDataType`.
     pub indirect_constant_data_type: u64,
+    /// The AIR address space of a buffer (1 device, 2 constant; the `isConstantBuffer` of its `MTLPointerType`), 0 when
+    /// not reported.
+    pub buffer_address_space: u32,
+    /// `MTLDataType`: the element type of threadgroup memory (`threadgroupMemoryDataType`), 0 when not reported.
+    pub threadgroup_memory_data_type: u64,
 }
 
 /// One `MTLType`; `data_type` selects which members are meaningful (struct: `members`; array: `element_*`,
 /// `array_length`, `stride`, `argument_index_stride`; pointer: `element_*`, `access`, `alignment`, `data_size`,
-/// `element_is_argument_buffer`; texture reference: `texture_*`, `access`, `is_depth_texture`).
+/// `element_is_argument_buffer`, `address_space`; texture reference: `texture_*`, `access`, `is_depth_texture`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TypeReflection {
     /// `MTLDataType`.
@@ -595,6 +621,8 @@ pub struct TypeReflection {
     /// `MTLTextureType`.
     pub texture_type: u64,
     pub is_depth_texture: bool,
+    /// A pointer's AIR address space (1 device, 2 constant), 0 when not reported.
+    pub address_space: u32,
 }
 
 /// One `MTLStructMember`.
