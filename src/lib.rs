@@ -4,6 +4,7 @@
 //! the generated code, and returns WGSL, the binding layout, the pass structure, reflection and the WebGPU features
 //! and limits the result needs, or a [`Refusal`].
 
+pub mod air;
 pub mod api;
 pub mod bitcode;
 pub mod bitstream;
