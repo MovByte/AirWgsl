@@ -247,3 +247,45 @@ fn corpus_fuzz_kernels() {
     }
     assert!(checked > 0);
 }
+
+/// LangRef's value semantics on the interpreter (`ir/semantics.ll`).
+#[test]
+fn interpreter_follows_langref() {
+    use airwgsl::interp::{Error, Memory, Options, run};
+    let m = fixture(include_bytes!("ir/semantics.bc"));
+    let call = |name: &str, args: &[Val]| {
+        let mut mem = Memory::new();
+        run(&m, m.function_by_name(name).unwrap(), args, &mut mem, &Options::default()).map(|o| o.ret.unwrap())
+    };
+    let scalar = |v: Val| v.scalar().unwrap();
+    // freeze: a defined value, the same for all uses (the interpreter chooses zero bits, so x + x is 0), marked as a
+    // choice (conservatively: every bit of the sum, though its lowest is 0 whatever the choice).
+    let r = scalar(call("freeze_even", &[]).unwrap());
+    assert!(r.is_defined() && r.bits == 0 && r.choice == 0xffff_ffff);
+    // undef + undef: undef in every bit.
+    assert_eq!(scalar(call("undef_twice", &[]).unwrap()).undef, 0xffff_ffff);
+    // and of uninitialized memory with 0: defined 0.
+    let r = scalar(call("uninit_and_zero", &[]).unwrap());
+    assert!(r.is_defined() && r.bits == 0);
+    // A load before lifetime.start: undefined behavior.
+    assert!(matches!(call("dead_before_start", &[]), Err(Error::Ub { .. })));
+    // inbounds: one past the end is a pointer, two past is poison.
+    let off = |k: u128| scalar(call("gep_bounds", &[Val::S(Scalar::int(k))]).unwrap());
+    assert_eq!(off(4).bits, 16);
+    assert!(off(5).poison);
+    // fptosi: out of range is poison.
+    let f = |x: f32| Val::S(Scalar::int(x.to_bits() as u128));
+    assert!(scalar(call("fptosi_range", &[f(3.0e9)]).unwrap()).poison);
+    assert_eq!(scalar(call("fptosi_range", &[f(-7.9)]).unwrap()).bits, (-7i32) as u32 as u128);
+    // 0 * inf: the preferred NaN, its sign a choice; under nnan, poison.
+    let r = scalar(call("nan_result", &[f(0.0)]).unwrap());
+    assert_eq!((r.bits, r.choice), (0x7fc0_0000, 0x8000_0000));
+    assert!(scalar(call("nan_nnan", &[f(0.0)]).unwrap()).poison);
+    // select undef, 12, 13: 0b110x, the lowest bit undef.
+    let r = scalar(call("select_undef", &[]).unwrap());
+    assert_eq!((r.bits, r.undef), (12, 1));
+    // A vector bitcast: the lane built from a poison i16 is poison, the other is 0x00020001.
+    let Val::V(l) = call("bitcast_lanes", &[]).unwrap() else { panic!() };
+    assert_eq!(l[0].bits, 0x0002_0001);
+    assert!(l[1].poison);
+}
