@@ -47,7 +47,8 @@
 //!   arguments that carry a function-constant predicate, whose initializers now hold the predicate values: an
 //!   argument is present exactly when [`specialize::predicate_present`] says so); the other module-level AIR
 //!   metadata (`!air.compile_options`, `!air.version`, `!air.language_version`, `!air.sampler_states`,
-//!   `!llvm.module.flags`, ...) is copied, with references to globals that were not kept turned into null operands.
+//!   `!llvm.module.flags`, ...) is copied, without the records that name a global the canonical module does not keep
+//!   (the `!air.function_constants` records of folded constants); a list left empty goes.
 //!   The AIR metadata decoder (package S2) reads these from the canonical module.
 //! - Stack objects left (`alloca`) are those accessed in ways that need memory: dynamic indices, pointers that
 //!   escape (into calls, stores of the pointer, `ptrtoint`, `select` or `phi`), volatile or atomic accesses, or
@@ -220,8 +221,24 @@ pub fn extract(m: &Module, f: usize) -> Canonical {
         if ENTRY_LISTS.contains(&nm.name.as_str()) || skip.contains(&nm.name.as_str()) {
             continue;
         }
-        let ops: Vec<_> = nm.ops.iter().filter_map(|&op| c.md(&mut out, op)).collect();
-        others.push(NamedMetadata { name: nm.name.clone(), ops });
+        // A record that names a global the canonical module does not keep (a function constant's global, once its
+        // value is folded) describes nothing left: it goes, rather than staying with a null operand.
+        let kept: std::collections::HashSet<GlobalId> = c.globals.keys().copied().collect();
+        let names_dropped = |op: crate::ir::MdId| -> bool {
+            let Metadata::Tuple { ops, .. } = m.md(op) else { return false };
+            ops.iter()
+                .flatten()
+                .any(|&o| matches!(m.md(o), Metadata::Value { value: Value::Global(g), .. } if !kept.contains(g)))
+        };
+        let mut ops = Vec::new();
+        for &op in nm.ops.iter().filter(|&&op| !names_dropped(op)) {
+            if let Some(d) = c.md(&mut out, op) {
+                ops.push(d);
+            }
+        }
+        if !ops.is_empty() {
+            others.push(NamedMetadata { name: nm.name.clone(), ops });
+        }
     }
     c.finish(&mut out);
     // Keep the source order of named metadata.
