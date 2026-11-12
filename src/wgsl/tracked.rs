@@ -259,6 +259,31 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.1 stages 2 and 3",
     },
     Item {
+        id: "barrier-uniformity",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a threadgroup or SIMD-group barrier that WGSL's uniformity analysis cannot prove to be reached in \
+                  uniform control flow (WGSL rejects such a shader; on Apple GPUs threads that have ended stop taking \
+                  part in barriers)",
+        reference: "WGSL 15.2, 17.11; MSL 6.10.1",
+    },
+    Item {
+        id: "barrier-stage",
+        owner: None,
+        kind: RefusalKind::NoExactLowering,
+        summary: "a threadgroup or SIMD-group barrier outside a kernel: WGSL has synchronization functions in compute \
+                  shaders only",
+        reference: "WGSL 17.11; MSL 6.10",
+    },
+    Item {
+        id: "uniformity-text",
+        owner: Some("S6d"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a generated module with a barrier whose text the uniformity analysis does not read (a pointer \
+                  declaration or another construct it does not model)",
+        reference: "WGSL 15.2",
+    },
+    Item {
         id: "sync-operand",
         owner: None,
         kind: RefusalKind::RejectedByDevice,
