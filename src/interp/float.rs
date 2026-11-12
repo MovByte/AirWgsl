@@ -115,6 +115,14 @@ impl Format {
         if self == DOUBLE {
             return f64::from_bits(bits);
         }
+        // binary32 and bfloat (its upper half) widen exactly through the host's conversion; a NaN keeps its payload
+        // in the top fraction bits either way.
+        if self == SINGLE && !self.is_nan(bits) {
+            return f32::from_bits(bits as u32) as f64;
+        }
+        if self == BFLOAT && !self.is_nan(bits) {
+            return f32::from_bits((bits as u32) << 16) as f64;
+        }
         match self.decode(bits) {
             Class::Nan { neg, .. } => {
                 // The payload moves to the top of the binary64 fraction, as a widening conversion does.
@@ -129,7 +137,8 @@ impl Format {
                 }
             }
             Class::Finite { neg, mant, exp } => {
-                let v = mant as f64 * 2f64.powi(exp);
+                // 2^exp is a normal binary64 for every exponent of the narrower formats.
+                let v = mant as f64 * f64::from_bits(((exp + 1023) as u64) << 52);
                 if neg { -v } else { v }
             }
         }
@@ -146,6 +155,10 @@ impl Format {
     pub fn from_f64_delta(self, x: f64, delta: i8) -> u64 {
         if self == DOUBLE {
             return x.to_bits();
+        }
+        // The host's binary64-to-binary32 conversion rounds to nearest, ties to even, subnormals included.
+        if self == SINGLE && delta == 0 && !x.is_nan() {
+            return (x as f32).to_bits() as u64;
         }
         let b = x.to_bits();
         match DOUBLE.decode(b) {

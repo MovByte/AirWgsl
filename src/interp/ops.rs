@@ -411,30 +411,37 @@ fn fmf_poison(fmt: Format, fmf: FastMath, operands: &[u64], result: u64) -> bool
 /// `nnan`/`ninf`, the NaN rules for a NaN result, and under `nsz` the sign of a zero operand or result as a choice.
 pub fn float_math(fmt: Format, fmf: FastMath, operands: &[Scalar], f: &dyn Fn(&[u64]) -> u64) -> Scalar {
     let w = fmt.width();
+    let n = operands.len();
+    debug_assert!(n <= 4);
     if operands.iter().any(|o| o.poison) {
         return Scalar::POISON;
     }
-    let refs: Vec<&Scalar> = operands.iter().collect();
+    let any_choice = operands.iter().any(|o| o.choice != 0);
     if operands.iter().any(|o| o.undef != 0) {
-        return spread_choice(all_undef(w), w, &refs);
+        return all_undef(w);
     }
-    let vals: Vec<u64> = operands.iter().map(|o| o.bits as u64).collect();
-    let r = f(&vals);
-    if fmf_poison(fmt, fmf, &vals, r) {
+    let mut vals = [0u64; 4];
+    for (v, o) in vals.iter_mut().zip(operands) {
+        *v = o.bits as u64;
+    }
+    let vals = &vals[..n];
+    let r = f(vals);
+    if fmf_poison(fmt, fmf, vals, r) {
         return Scalar::POISON;
     }
-    let mut out = if fmt.is_nan(r) { nan_result(fmt, &vals) } else { Scalar::int(r as u128) };
+    let mut out = if fmt.is_nan(r) { nan_result(fmt, vals) } else { Scalar::int(r as u128) };
     if fmf.0 & FastMath::NSZ != 0 {
         // Each zero operand may be taken with either sign; collect the bits on which the results differ.
-        let zeros: Vec<usize> = (0..vals.len()).filter(|&i| fmt.is_zero(vals[i])).collect();
+        let zeros: Vec<usize> = (0..n).filter(|&i| fmt.is_zero(vals[i])).collect();
         for combo in 1u32..(1 << zeros.len()) {
-            let mut alt = vals.clone();
+            let mut alt = [0u64; 4];
+            alt[..n].copy_from_slice(vals);
             for (k, &i) in zeros.iter().enumerate() {
                 if combo & (1 << k) != 0 {
                     alt[i] ^= fmt.sign_bit();
                 }
             }
-            let r2 = f(&alt);
+            let r2 = f(&alt[..n]);
             if fmt.is_nan(r2) != fmt.is_nan(r) {
                 // A zero's sign that decides between a NaN and a number: every bit is open.
                 out.choice = mask(w);
@@ -446,7 +453,9 @@ pub fn float_math(fmt: Format, fmf: FastMath, operands: &[Scalar], f: &dyn Fn(&[
             out.choice |= fmt.sign_bit() as u128;
         }
     }
-    let mut out = spread_choice_keep(out, w, &refs);
+    if any_choice {
+        out.choice = mask(w);
+    }
     out.choice &= mask(w);
     out
 }
