@@ -5,5 +5,6 @@
 //! and limits the result needs, or a [`Refusal`].
 
 pub mod api;
+pub mod num;
 
 pub use api::*;

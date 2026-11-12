@@ -7,3 +7,8 @@ license = "BSD-2-Clause-Patent"
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+naga = { version = "29", features = ["wgsl-in"] }
+pollster = "0.4"
+wgpu = { version = "29", default-features = false, features = ["metal", "wgsl"] }
