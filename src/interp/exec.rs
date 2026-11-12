@@ -92,8 +92,9 @@ pub fn eval_instruction(m: &Module, f: usize, inst: InstId, memory: &mut Memory,
         globals_creating: HashSet::new(),
     };
     let func = &m.functions[f];
-    let mut fr =
-        Frame { f, args: Vec::new(), vals: vec![None; func.insts.len()], allocas: Vec::new(), cur: Some(inst) };
+    // No local value is read (the operands are constants and globals), so the frame holds none: sizing it to the
+    // function would make folding a function quadratic in its size.
+    let mut fr = Frame { f, args: Vec::new(), vals: Vec::new(), allocas: Vec::new(), cur: Some(inst) };
     if func.inst(inst).op.operands().iter().any(|v| matches!(v, Value::Arg(_) | Value::Inst(_))) {
         return Err(it.unsupported(&fr, "an instruction with local operands"));
     }
@@ -209,9 +210,9 @@ impl<'a> Interp<'a> {
     pub fn eval(&mut self, fr: &Frame, v: Value) -> R<Val> {
         match v {
             Value::Arg(i) => Ok(fr.args[i as usize].clone()),
-            Value::Inst(i) => match &fr.vals[i.0 as usize] {
-                Some(v) => Ok(v.clone()),
-                None => Err(self.unsupported(fr, format!("a use of %{} before its definition executed", i.0))),
+            Value::Inst(i) => match fr.vals.get(i.0 as usize) {
+                Some(Some(v)) => Ok(v.clone()),
+                _ => Err(self.unsupported(fr, format!("a use of %{} before its definition executed", i.0))),
             },
             Value::Const(c) => self.eval_const(c).map_err(|e| relocate(e, &self.loc(fr))),
             Value::Global(g) => self.global_ptr(g).map(Val::S).map_err(|e| relocate(e, &self.loc(fr))),
