@@ -9,7 +9,8 @@
 //! invocations of the entry point on one memory. REPORT.tsv gets one line per job: path, entry, status, detail.
 //! Seeds cycle through three ways of filling buffers (floats, small integers, random bytes; see the harness).
 //! Statuses: `ok` (refines for every seed, and at least one seed's original run was defined), `ok-original-ub` (every
-//! seed's original run had undefined behavior, which any result refines: the job shows nothing), `refusal` (canonicalization refused, with the construct), `unchecked`
+//! seed's original run had undefined behavior, which any result refines: the job shows nothing; a seed whose original
+//! run reaches the step limit, `AIRWGSL_STEP_LIMIT` instructions per invocation, shows nothing either), `refusal` (canonicalization refused, with the construct), `unchecked`
 //! (the interpreter cannot run the original: the reason), `mismatch`, `canonical-error` and `panic` (failures).
 //! The totals go to stdout; the exit status is non-zero if any job failed.
 
@@ -48,6 +49,7 @@ fn check(path: &str, entry: &str, seeds: u64) -> (String, String) {
     let Some(f) = m.function_by_name(entry) else { return ("unchecked".into(), "no such function".into()) };
     let kinds = harness::arg_kinds(m, f);
     let mut ub = None;
+    let mut limit = None;
     let mut defined = 0;
     for seed in 0..seeds {
         let fill = [harness::Fill::Floats, harness::Fill::SmallInts, harness::Fill::Random][(seed % 3) as usize];
@@ -77,6 +79,7 @@ fn check(path: &str, entry: &str, seeds: u64) -> (String, String) {
         match harness::compare(&a, &b) {
             Verdict::Refines => defined += 1,
             Verdict::FirstUb(r) => ub = Some(r),
+            Verdict::FirstLimit(r) => limit = Some(r),
             Verdict::FirstUnsupported(r) => return ("unchecked".into(), r),
             Verdict::Differs(d) => {
                 let st = if b.result.is_err() { "canonical-error" } else { "mismatch" };
@@ -86,8 +89,9 @@ fn check(path: &str, entry: &str, seeds: u64) -> (String, String) {
     }
     // A job is checked when some seed's original run was defined; a job whose every run had undefined behavior
     // shows nothing.
-    match (defined, ub) {
-        (0, Some(r)) => ("ok-original-ub".into(), r),
+    match (defined, ub, limit) {
+        (0, Some(r), _) => ("ok-original-ub".into(), r),
+        (0, None, Some(l)) => ("unchecked".into(), format!("limit: {}", l)),
         _ => ("ok".into(), String::new()),
     }
 }

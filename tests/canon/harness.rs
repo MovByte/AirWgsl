@@ -314,6 +314,11 @@ pub fn constant_values(m: &Module, rng: &mut Rng) -> Vec<FunctionConstant> {
     out
 }
 
+/// Instructions one invocation may execute: `AIRWGSL_STEP_LIMIT`, or 2 million.
+pub fn step_limit() -> u64 {
+    std::env::var("AIRWGSL_STEP_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000)
+}
+
 /// A finished run: its outcome or error, and its memory.
 pub struct Run {
     pub result: Result<Outcome, Error>,
@@ -331,7 +336,7 @@ pub fn run(
     externals: Externals,
 ) -> Run {
     let mut mem = Memory::new();
-    let mut opts = Options { externals, step_limit: 20_000_000, ..Options::default() };
+    let mut opts = Options { externals, step_limit: step_limit(), ..Options::default() };
     // Buffers and objects, labelled by argument.
     let mut regions = Vec::new();
     for (k, kind) in kinds.iter().enumerate() {
@@ -413,6 +418,8 @@ pub enum Verdict {
     FirstUb(String),
     /// The first run could not be evaluated; nothing is shown.
     FirstUnsupported(String),
+    /// The first run reached the step limit; nothing is shown.
+    FirstLimit(String),
     /// The second does not refine the first.
     Differs(String),
 }
@@ -422,6 +429,7 @@ pub fn compare(a: &Run, b: &Run) -> Verdict {
     let oa = match &a.result {
         Ok(o) => o,
         Err(Error::Ub { reason, location }) => return Verdict::FirstUb(format!("{} ({})", reason, location)),
+        Err(Error::Limit(l)) => return Verdict::FirstLimit(l.clone()),
         Err(e) => return Verdict::FirstUnsupported(e.to_string()),
     };
     let ob = match &b.result {
