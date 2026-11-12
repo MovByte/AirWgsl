@@ -233,6 +233,7 @@ pub fn registered() -> Rules {
     }
     r.with(Box::new(crate::icb::Encoding))
         .with(Box::new(crate::ftable::Calls))
+        .with_stage(Box::new(crate::argbuf::ArgumentBuffers))
         .with_stage(Box::new(crate::icb::Arguments))
         .with_stage(Box::new(crate::ftable::Arguments))
 }

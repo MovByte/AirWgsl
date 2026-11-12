@@ -302,6 +302,22 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.7 (indirect command buffers); MSL 6.17",
     },
     Item {
+        id: "argument-buffer-buffer",
+        owner: Some("C0"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a buffer member of an argument buffer: the handle word the encoder writes is the buffer's wire handle \
+                  only, without the offset of setBuffer:offset:atIndex:, so the member's binding has no exact source",
+        reference: "plan 5.5; WebMetal wire schema (Handles)",
+    },
+    Item {
+        id: "argument-buffer-handle",
+        owner: Some("S6d"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a texture or sampler member of an argument buffer: the texture and sampler lowering binds the handles \
+                  of entry arguments only, not handles loaded from an argument buffer's member",
+        reference: "plan 5.5",
+    },
+    Item {
         id: "threadgroup-memory-length",
         owner: None,
         kind: RefusalKind::RejectedByDevice,

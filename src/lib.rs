@@ -6,6 +6,7 @@
 
 pub mod air;
 pub mod api;
+pub mod argbuf;
 pub mod bitcode;
 pub mod bitstream;
 pub mod cfg;
