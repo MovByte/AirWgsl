@@ -60,14 +60,17 @@
 //! Apple5; the A10X is Apple3). Each of these is refused as on the device.
 //!
 //! Alignment is not validated on the target: 21H461's Metal.framework checks no stride or offset alignment (the
-//! descriptor validation above and `newSerializedDescriptor`), and its only use of `supportsUnalignedVertexFetch`, which
-//! the A10X answers NO, is `MTLGetCompilerOptions` (0x187a9acdc) choosing a compiler option bit, so the pipeline is
-//! created. The API validation layer (MetalTools) alone checks, at draw and stage-in dispatch time, that a stride is a
-//! multiple of 4 on such a device (`-[MTLDebugRenderCommandEncoder validateCommonDrawErrors:instanceCount:baseInstance:
-//! maxVertexID:]`, "providing stride of %u to buffer-layout index %u, but device only supports strides that are a
-//! multiple of 4 bytes."), which the guest's own validation layer reports against the plugin device. Pipelines with
-//! unaligned strides or offsets are therefore compiled; the generated code reads the addressed bytes, as a device
-//! with unaligned fetch does (measured), where the A10X's result is undefined.
+//! descriptor validation above and `newSerializedDescriptor`), and reads `supportsUnalignedVertexFetch`, which the A10X
+//! answers NO, only to choose a compiler option bit (`MTLGetCompilerOptions`, 0x187a9acdc) and to record it in its
+//! feature table (`-[_MTLDeviceFeatureQueries initWithDevice:]`), so the pipeline is created. The API validation layer
+//! (MetalTools) alone checks, when a draw or stage-in dispatch is encoded on such a device, that each stride is a
+//! multiple of 4 (`-[MTLDebugRenderCommandEncoder validateCommonDrawErrors:instanceCount:baseInstance:maxVertexID:]`,
+//! "providing stride of %u to buffer-layout index %u, but device only supports strides that are a multiple of 4
+//! bytes.") and that the buffers the descriptor reads are bound at offsets aligned to their arguments'
+//! `bufferAlignment` (`validateFunctionArguments`, which exempts them only on a device with unaligned fetch); the
+//! guest's own validation layer reports these against the plugin device. Pipelines with unaligned strides or offsets
+//! are therefore compiled; the generated code reads the addressed bytes, as a device with unaligned fetch does
+//! (measured), where the A10X's result is undefined.
 
 use super::lib;
 use crate::air::{Argument, Location, Role, Slot};
