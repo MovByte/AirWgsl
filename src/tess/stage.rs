@@ -24,6 +24,9 @@
 //! "stepRate(...) must be one if stepFunction is MTLVertexStepFunctionPerPatch", measured). Other step functions for
 //! these attributes have not been measured and are refused as not implemented.
 
+// The refusal is the compiler's only failure value (api::compile) and is returned by value throughout.
+#![allow(clippy::result_large_err)]
+
 use crate::air::{Argument, PatchKind, Role};
 use crate::api::{
     BindingResource, BindingSource, BufferBindingType, Location as At, PipelineKind, Refusal, Tessellation,
