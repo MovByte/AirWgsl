@@ -626,9 +626,6 @@ pub fn compile_with(
             k
         }
         PipelineKind::Render(r) => {
-            if r.tessellation.is_some() {
-                return Err(tracked::refuse_family("tessellation", "tessellation", None));
-            }
             if r.max_vertex_amplification_count > 1 {
                 return Err(tracked::refuse("pipeline-kind", "vertex amplification", None, "vertex amplification"));
             }
@@ -731,6 +728,39 @@ pub fn compile_with(
         let key = crate::fetch::overlap::key(stage_modules);
         crate::fetch::overlap::build(&v.module.ir, &v.entry, rounding, host, key).ok()
     });
+    // Tessellation (package S6e): the vertex function is a post-tessellation function exactly when the pipeline has
+    // tessellation state (the guest sets the state from the function's patch record).
+    let patch = order.iter().find(|i| i.stage == MetalStage::Vertex).and_then(|v| v.entry.patch);
+    let tessellated = matches!(&desc.kind, PipelineKind::Render(r) if r.tessellation.is_some());
+    let plan = match (patch, tessellated, plan) {
+        (None, false, plan) => plan,
+        (Some(p), true, PassPlan::Direct) => PassPlan::Tessellation { quad: p.kind == crate::air::PatchKind::Quad },
+        (Some(_), true, _) => {
+            return Err(tracked::refuse(
+                "post-tessellation-input",
+                "tessellation",
+                None,
+                "a tessellation pipeline whose fragment function reads color attachments: the per-primitive passes of \
+                 framebuffer fetch over tessellated draws are not implemented",
+            ));
+        }
+        (None, true, _) => {
+            return Err(tracked::refuse(
+                "pipeline-kind",
+                "tessellation",
+                None,
+                "tessellation state with a vertex function that is not a post-tessellation function",
+            ));
+        }
+        (Some(_), false, _) => {
+            return Err(tracked::refuse(
+                "pipeline-kind",
+                "air.patch",
+                None,
+                "a post-tessellation vertex function in a pipeline without tessellation state",
+            ));
+        }
+    };
     Ok(Compiled { wgsl, layout, passes: vec![plan], reflection, requirements })
 }
 
@@ -745,8 +775,10 @@ pub fn compile_entry(
     threads: [u64; 3],
     tg_lengths: &[u64],
 ) -> R<(String, HostRequirements)> {
-    // `[[stage_in]]` attributes are read in their own types from one buffer (crate::stage::fetch::natural_layout).
+    // `[[stage_in]]` attributes are read in their own types from one buffer (crate::stage::fetch::natural_layout); a
+    // post-tessellation function gets tessellation state and its patch attributes' layout (crate::tess::stage).
     let natural = crate::stage::fetch::natural_layout(&inp.module.ir, &inp.entry);
+    let tessellated = crate::tess::stage::corpus_state(&inp.module.ir, &inp.entry);
     let desc = match inp.stage {
         MetalStage::Kernel => PipelineDesc {
             kind: PipelineKind::Compute(ComputeState {
@@ -768,19 +800,21 @@ pub fn compile_entry(
         },
         _ => PipelineDesc {
             kind: PipelineKind::Render(RenderState {
-                vertex_descriptor: natural.map(|(buffer, stride, attrs)| {
-                    let mut layouts =
-                        vec![VertexBufferLayout { stride: 0, step_function: 1, step_rate: 1 }; buffer as usize + 1];
-                    layouts[buffer as usize].stride = stride;
-                    let mut attributes = Vec::new();
-                    for (index, format, offset) in attrs {
-                        attributes.resize(
-                            attributes.len().max(index as usize + 1),
-                            VertexAttribute { format: 0, offset: 0, buffer_index: 0 },
-                        );
-                        attributes[index as usize] = VertexAttribute { format, offset, buffer_index: buffer };
-                    }
-                    VertexDescriptor { layouts, attributes }
+                vertex_descriptor: tessellated.as_ref().and_then(|t| t.1.clone()).or_else(|| {
+                    natural.map(|(buffer, stride, attrs)| {
+                        let mut layouts =
+                            vec![VertexBufferLayout { stride: 0, step_function: 1, step_rate: 1 }; buffer as usize + 1];
+                        layouts[buffer as usize].stride = stride;
+                        let mut attributes = Vec::new();
+                        for (index, format, offset) in attrs {
+                            attributes.resize(
+                                attributes.len().max(index as usize + 1),
+                                VertexAttribute { format: 0, offset: 0, buffer_index: 0 },
+                            );
+                            attributes[index as usize] = VertexAttribute { format, offset, buffer_index: buffer };
+                        }
+                        VertexDescriptor { layouts, attributes }
+                    })
                 }),
                 // The attachments a fragment function reads, in formats of their inputs' classes (package S6c).
                 color_attachments: if inp.stage == MetalStage::Fragment {
@@ -796,7 +830,7 @@ pub fn compile_entry(
                 rasterization_enabled: true,
                 input_primitive_topology: 3,
                 primitive_type: None,
-                tessellation: None,
+                tessellation: tessellated.as_ref().map(|t| t.0),
                 max_vertex_amplification_count: 1,
             }),
             bindings: Vec::new(),

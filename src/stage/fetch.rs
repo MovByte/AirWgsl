@@ -236,12 +236,12 @@ pub fn compatible(format: &Format, s: Scalar) -> bool {
     }
 }
 
-fn rejected(construct: impl Into<String>, at: &Option<At>, detail: impl Into<String>) -> Refusal {
+pub(crate) fn rejected(construct: impl Into<String>, at: &Option<At>, detail: impl Into<String>) -> Refusal {
     tracked::refuse("vertex-descriptor", construct, at.clone(), detail)
 }
 
 /// The WGSL of a byte loader over a storage variable: the little-endian `u32` at any byte address.
-fn loader(cx: &mut dyn StageCx, var: &str) -> String {
+pub(crate) fn loader(cx: &mut dyn StageCx, var: &str) -> String {
     let name = format!("aw_vload_{}", var);
     cx.module_item(
         &name,
@@ -367,7 +367,7 @@ pub fn element(cx: &mut dyn StageCx, load: &str, addr: &str, format: &Format, sc
 }
 
 /// The record of a stage-in attribute: its attribute index.
-fn attribute_index(at: &Option<At>, loc: &Location, kind: &str) -> R<u64> {
+pub(crate) fn attribute_index(at: &Option<At>, loc: &Location, kind: &str) -> R<u64> {
     let index = match loc.index {
         Slot::Value(v) => v as u64,
         Slot::Constant(_) => return Err(tracked::refuse_family("function-constants", kind, at.clone())),
@@ -386,7 +386,7 @@ fn arg_info(cx: &dyn StageCx, arg: u32) -> (Option<At>, TypeId) {
 }
 
 /// `MTLBufferLayoutStrideDynamic`.
-const STRIDE_DYNAMIC: u64 = u64::MAX;
+pub(crate) const STRIDE_DYNAMIC: u64 = u64::MAX;
 
 /// Lower a `[[stage_in]]` vertex attribute (`air.vertex_input`).
 pub fn vertex_input(cx: &mut dyn StageCx, arg: u32, record: &Argument) -> R<String> {
@@ -444,7 +444,13 @@ pub fn vertex_input(cx: &mut dyn StageCx, arg: u32, record: &Argument) -> R<Stri
     fetch(cx, arg, a.buffer_index, stride, a.offset, &index, fmt, scalar, lanes)
 }
 
-fn check_format(at: &Option<At>, construct: &str, value: u64, scalar: Scalar, lanes: u32) -> R<&'static Format> {
+pub(crate) fn check_format(
+    at: &Option<At>,
+    construct: &str,
+    value: u64,
+    scalar: Scalar,
+    lanes: u32,
+) -> R<&'static Format> {
     let fmt =
         format(value).ok_or_else(|| rejected(construct, at, format!("format {} is not an MTLVertexFormat", value)))?;
     if fmt.kind == Kind::PackedFloat {
@@ -472,7 +478,7 @@ fn check_format(at: &Option<At>, construct: &str, value: u64, scalar: Scalar, la
     Ok(fmt)
 }
 
-fn check_stride(at: &Option<At>, construct: &str, buffer: u64, stride: u64) -> R<u64> {
+pub(crate) fn check_stride(at: &Option<At>, construct: &str, buffer: u64, stride: u64) -> R<u64> {
     if stride == STRIDE_DYNAMIC {
         return Err(rejected(
             construct,

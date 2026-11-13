@@ -12,6 +12,7 @@
 pub mod factors;
 pub mod hw;
 pub mod kernel;
+pub mod stage;
 
 pub use factors::{PartitionMode, PatchType, Settings};
 

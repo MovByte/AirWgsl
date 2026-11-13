@@ -17,7 +17,7 @@ fn words(b: &[u8]) -> Vec<u32> {
     b.chunks(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
-fn read(d: &wgpu::Device, q: &wgpu::Queue, b: &wgpu::Buffer, size: u64) -> Vec<u32> {
+pub fn read(d: &wgpu::Device, q: &wgpu::Queue, b: &wgpu::Buffer, size: u64) -> Vec<u32> {
     let staging = d.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size,
@@ -33,13 +33,17 @@ fn read(d: &wgpu::Device, q: &wgpu::Queue, b: &wgpu::Buffer, size: u64) -> Vec<u
     words(&s.get_mapped_range())
 }
 
-/// Run the three dispatches for a draw. The factor buffer is bound from offset 0 and the draw's offset goes into the
+/// The kernels' output buffers on the GPU.
+pub struct Kernels {
+    pub vertices: wgpu::Buffer,
+    pub indices: wgpu::Buffer,
+    pub draw: wgpu::Buffer,
+}
+
+/// The kernel parameters of a draw. The factor buffer is bound from offset 0 and the draw's offset goes into the
 /// parameters, as the executor does for a Metal offset below the storage alignment.
-fn run(d: &Draw) -> Out {
-    let g = gpu();
-    let dev = &g.device;
-    let settings = d.settings();
-    let mut p = kernel::Params::new(&settings, d.patch_type()).with_scale(d.scale);
+pub fn params(d: &Draw) -> kernel::Params {
+    let mut p = kernel::Params::new(&d.settings(), d.patch_type()).with_scale(d.scale);
     p.factor_offset = d.offset;
     p.instance_stride = d.instance_stride;
     p.step = d.step;
@@ -50,7 +54,15 @@ fn run(d: &Draw) -> Out {
     if !d.patch_indices.is_empty() {
         p.patch_index_offset = Some(0);
     }
-    let (max_points, max_indices) = kernel::bounds(&settings, d.patch_type());
+    p
+}
+
+/// Run the three dispatches for a draw.
+pub fn dispatch(d: &Draw) -> Kernels {
+    let g = gpu();
+    let dev = &g.device;
+    let p = params(d);
+    let (max_points, max_indices) = kernel::bounds(&d.settings(), d.patch_type());
     let slots = p.slots();
     let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let mut factor_bytes: Vec<u8> = d.factors.iter().flat_map(|h| h.to_le_bytes()).collect();
@@ -119,12 +131,18 @@ fn run(d: &Draw) -> Out {
         pass.dispatch_workgroups(if k == 1 { 1 } else { slots.div_ceil(kernel::WORKGROUP) }, 1, 1);
     }
     g.queue.submit([e.finish()]);
-    let draw = read(dev, &g.queue, &draw_buffer, 4 * kernel::DRAW_WORDS as u64);
+    Kernels { vertices, indices, draw: draw_buffer }
+}
+
+fn run(d: &Draw) -> Out {
+    let g = gpu();
+    let k = dispatch(d);
+    let draw = read(&g.device, &g.queue, &k.draw, 4 * kernel::DRAW_WORDS as u64);
     let points = draw[kernel::DRAW_POINTS as usize] as u64;
     let index_count = draw[0] as u64;
     Out {
-        vertices: if points == 0 { Vec::new() } else { read(dev, &g.queue, &vertices, 16 * points) },
-        indices: if index_count == 0 { Vec::new() } else { read(dev, &g.queue, &indices, 4 * index_count) },
+        vertices: if points == 0 { Vec::new() } else { read(&g.device, &g.queue, &k.vertices, 16 * points) },
+        indices: if index_count == 0 { Vec::new() } else { read(&g.device, &g.queue, &k.indices, 4 * index_count) },
         draw,
     }
 }

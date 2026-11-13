@@ -168,6 +168,8 @@ impl Layout {
             BindingSource::MetalBuffer { index, .. } => format!("aw_rb{}{}", s, index),
             BindingSource::Uniforms(_) => format!("aw_ru{}", s),
             BindingSource::FetchSnapshot { attachment } => format!("aw_fb{}{}", s, attachment),
+            BindingSource::TessellationVertices => format!("aw_tv{}", s),
+            BindingSource::ControlPointIndices => format!("aw_tc{}", s),
         }
     }
 
@@ -270,9 +272,14 @@ impl Layout {
             ));
         }
         for r in self.resources.iter().filter(|r| r.stage == stage) {
+            // A buffer a rule asked for is storage the stage only reads.
+            let space = match r.resource {
+                BindingResource::Buffer { .. } => "<storage, read>",
+                _ => "",
+            };
             out.push_str(&format!(
-                "@group({}) @binding({}) var {}: {};\n",
-                RESOURCE_GROUP, r.binding, r.name, r.wgsl_type
+                "@group({}) @binding({}) var{} {}: {};\n",
+                RESOURCE_GROUP, r.binding, space, r.name, r.wgsl_type
             ));
         }
         out

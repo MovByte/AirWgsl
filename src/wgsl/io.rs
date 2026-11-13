@@ -210,7 +210,7 @@ fn from_vec3(m: &Module, w: &str, t: TypeId) -> Option<String> {
 }
 
 /// A `u32` built-in as the carrier of IR type `t` (uint or ushort).
-fn from_u32(m: &Module, w: &str, t: TypeId) -> Option<String> {
+pub(crate) fn from_u32(m: &Module, w: &str, t: TypeId) -> Option<String> {
     match m.types.int_bits(t)? {
         32 => Some(w.to_string()),
         16 => Some(format!("({} & 0xffffu)", w)),
@@ -472,8 +472,11 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
         PipelineKind::Compute(c) => Some(c),
         _ => None,
     };
-    if e.patch.is_some() {
-        return Err(tracked::refuse_family("tessellation", "air.patch", loc(m, fi)));
+    // A post-tessellation vertex function (package S6e) reads its inputs from the tessellator's point records.
+    let post_tessellation = e.patch.is_some();
+    if post_tessellation {
+        let mut scx = StageCtx { cx, it: &mut it, layout };
+        crate::tess::stage::begin(&mut scx)?;
     }
     if stage == MetalStage::Kernel {
         let c = compute.ok_or_else(|| {
@@ -537,6 +540,13 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
         }
         let t = a.ty;
         let bind = |it: &mut Interface, expr: String| it.prologue.push(format!("let {} = {};", name, expr));
+        if post_tessellation && !unused {
+            let mut scx = StageCtx { cx, it: &mut it, layout };
+            if let Some(e) = crate::tess::stage::argument(&mut scx, i as u32, r)? {
+                bind(&mut it, e);
+                continue;
+            }
+        }
         if let Some(rule) = cx.rules.stage_argument(stage, kind) {
             let mut scx = StageCtx { cx, it: &mut it, layout };
             let e = rule.argument(&mut scx, i as u32, r)?;

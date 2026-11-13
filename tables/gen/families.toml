@@ -930,7 +930,7 @@ msl = "post-tessellation vertex functions (5.1.1.1) and their patch_control_poin
 decision = "emulation"
 plan = "5.7 tessellation row (package S6e)"
 wgsl = "none"
-reason = "Tessellation is on the A10X's family; WebGPU has none. LOUD at pipeline creation until the fixed-function tessellator emulation lands."
+reason = "Tessellation is on the A10X's family; WebGPU has none. The executor runs the fixed-function tessellator as compute kernels and draws the generated triangles; post-tessellation vertex functions read their points, patch inputs and control points from buffers (src/tess)."
 cite = [
   { src = "mfst", quote = "Tessellation Metal 3 Apple3" },
   { src = "msl", ref = "5.1.1.1", quote = "5.1.1.1 Post-Tessellation Vertex Functions" },

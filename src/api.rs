@@ -467,6 +467,13 @@ pub enum BindingSource {
     /// a texture of the attachment's stored format, sample count and size, holding the attachment's contents as they
     /// were before the primitives the current WebGPU pass draws.
     FetchSnapshot { attachment: u32 },
+    /// The point records the tessellator generated for the draw ([`PassPlan::Tessellation`], `tess::kernel`):
+    /// read-only storage, four `u32` per point (u and v in 16.16 fixed point, patch identifier, instance identifier),
+    /// the draw's `vertex_index` selecting the record.
+    TessellationVertices,
+    /// The control-point index buffer of a `drawIndexedPatches` draw, from an aligned base at or before its Metal offset
+    /// ([`UniformValue::ControlPointIndexOffset`]): read-only storage of `u32`.
+    ControlPointIndices,
 }
 
 /// The executor's per-draw uniform block: what each field holds and where.
@@ -503,6 +510,10 @@ pub enum UniformValue {
     /// The size of the dispatch's stage-in region (`setStageInRegion:`): three `u32`, width, height and depth, at
     /// consecutive offsets.
     StageInSize,
+    /// The patch draw's `numberOfPatchControlPoints`.
+    PatchControlPoints,
+    /// Bytes from the control-point index binding's aligned base to the draw's `controlPointIndexBufferOffset`.
+    ControlPointIndexOffset,
 }
 
 impl UniformValue {
@@ -532,6 +543,12 @@ pub enum PassPlan {
     /// cover a common pixel, which `overlap` proves for a draw when it is present ([`crate::fetch::overlap`]): its
     /// [`OverlapProver::groups`] gives groups that may be drawn together. Without it every group is one primitive.
     PerPrimitive { fetched: Vec<u32>, overlap: Option<OverlapProver> },
+    /// Tessellation (plan 5.7): each patch draw runs the tessellator's compute kernels (`tess::kernel`) on the draw's
+    /// factor buffer before the pass, with the pipeline's tessellation state and the draw's arguments, then draws the
+    /// generated triangles as one `drawIndexedIndirect` (index format `uint32`, the kernels' index and draw buffers)
+    /// with [`BindingSource::TessellationVertices`] bound to the kernels' point records. `quad` is the vertex function's
+    /// patch type (`[[patch(quad)]]`, else triangle).
+    Tessellation { quad: bool },
 }
 
 pub use crate::fetch::overlap::OverlapProver;

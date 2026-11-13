@@ -9,6 +9,7 @@ mod stage;
 
 mod draw;
 mod kernel;
+mod render;
 
 use draw::{Draw, Expected};
 

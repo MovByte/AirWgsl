@@ -332,7 +332,16 @@ pub const ITEMS: &[Item] = &[
         id: "pipeline-kind",
         owner: None,
         kind: RefusalKind::NotImplemented,
-        summary: "a tile pipeline, or a render pipeline with tessellation, vertex amplification or no vertex function",
+        summary: "a tile pipeline, a render pipeline with vertex amplification or no vertex function, or tessellation \
+                  state that does not match the vertex function",
+        reference: "plan 5.7",
+    },
+    Item {
+        id: "post-tessellation-input",
+        owner: Some("S6e"),
+        kind: RefusalKind::NotImplemented,
+        summary: "a post-tessellation vertex function input or pipeline combination not measured on Metal: patch \
+                  attributes with other step functions, built-ins of other widths, tessellation with framebuffer fetch",
         reference: "plan 5.7",
     },
     Item {
