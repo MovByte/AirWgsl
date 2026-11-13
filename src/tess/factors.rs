@@ -59,6 +59,19 @@ pub struct Settings {
     pub clockwise: bool,
 }
 
+impl Settings {
+    /// The range Metal clamps the factors to: `[1, max]` for pow2 and integer partitioning, `[1, max - 1]` for
+    /// fractional odd, `[2, max]` for fractional even (`MTLTessellationPartitionMode` documentation).
+    pub fn clamp(&self) -> (f32, f32) {
+        let max = self.max_factor as f32;
+        match self.partition {
+            PartitionMode::Pow2 | PartitionMode::Integer => (1.0, max),
+            PartitionMode::FractionalOdd => (1.0, max - 1.0),
+            PartitionMode::FractionalEven => (2.0, max),
+        }
+    }
+}
+
 /// The factors the tessellator partitions with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Final {
@@ -151,12 +164,7 @@ pub fn process(settings: &Settings, patch: PatchType, halves: &[u16], scale: f32
     if edges[..ne].iter().any(|f| f.partial_cmp(&0.0) != Some(core::cmp::Ordering::Greater)) {
         return None;
     }
-    let max = settings.max_factor as f32;
-    let (lower, upper) = match settings.partition {
-        PartitionMode::Pow2 | PartitionMode::Integer => (1.0, max),
-        PartitionMode::FractionalOdd => (1.0, max - 1.0),
-        PartitionMode::FractionalEven => (2.0, max),
-    };
+    let (lower, upper) = settings.clamp();
     let clamp = |f: f32| if f.is_nan() { lower } else { f.clamp(lower, upper) };
     for f in edges[..ne].iter_mut().chain(inside[..ni].iter_mut()) {
         *f = clamp(*f);

@@ -6,10 +6,12 @@
 //! stage is the post-tessellation vertex function.
 //!
 //! [`hw`] generates one patch from its final factors; [`factors`] turns the half-precision factors of a factor buffer
-//! into those final factors as Metal does.
+//! into those final factors as Metal does; [`kernel`] is the same computation as WebGPU compute work, which the
+//! executor runs for a patch draw.
 
 pub mod factors;
 pub mod hw;
+pub mod kernel;
 
 pub use factors::{PartitionMode, PatchType, Settings};
 
