@@ -229,6 +229,10 @@ pub struct TextureSlot {
     pub sample_count: u64,
     /// `MTLTextureSwizzle` red, green, blue, alpha of the bound texture.
     pub swizzle: [u8; 4],
+    /// `mipmapLevelCount` of the bound texture (or view): the levels a function addresses, a view's from its first
+    /// level. A function that writes the texture at a level computed at run time binds each of them
+    /// ([`BindingSource::MetalTextureLevel`]).
+    pub mipmap_level_count: u64,
 }
 
 /// A bound sampler: the fields of its `MTLSamplerDescriptor` that WGSL fixes or the shader must emulate.
@@ -455,6 +459,10 @@ pub enum BindingSource {
     MetalBuffer { stage: MetalStage, index: u64 },
     /// A texture argument table slot.
     MetalTexture { stage: MetalStage, index: u64 },
+    /// One mipmap level of the texture at a texture argument table slot, viewed alone: level `level` of the bound
+    /// texture, counted from a view's first level. A storage texture binding shows one level (WebGPU 8.2.1: its view's
+    /// `mipLevelCount` is 1), so a function that writes a texture has a binding for each level it writes.
+    MetalTextureLevel { stage: MetalStage, index: u64, level: u32 },
     /// A sampler argument table slot.
     MetalSampler { stage: MetalStage, index: u64 },
     /// A member of an argument buffer, by argument id.

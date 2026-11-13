@@ -11,6 +11,17 @@
 //! textures as 2D and 2D array views (WebMetal `host/src/mem/texture.rs`); a cube texture that the function reads or
 //! writes texel by texel is bound as a 2D array view of its faces, since WGSL loads and stores no cube views.
 //!
+//! A written texture is bound by level ([`crate::api::BindingSource::MetalTextureLevel`]): a storage binding shows
+//! one level (WebGPU 8.2.1), and Metal writes at a level operand (`write(color, coord, lod)`, which the A10X's
+//! compiler takes computed at run time for every texture type but 1D and 1D array: its `metal_texture` header
+//! constrains `lod` to a constant 0 only for those, and on macOS before Metal 2.3). A write at a constant level binds
+//! that level; a write at a level computed at run time binds every level of the bound texture (a view's own levels,
+//! from its first) and selects among them with a `switch`, whose default is the out-of-range level that MSL 4.1
+//! section 6.13 ignores. The levels count against the host's storage textures per stage: a stage that would bind more
+//! is refused with the textures and their levels named, never bound with fewer levels. The level count is variant
+//! state ([`crate::api::TextureSlot::mipmap_level_count`]), so `get_num_mip_levels` of a written texture is a
+//! constant.
+//!
 //! A texture slot the description does not list holds no texture: the argument is a null texture. Only
 //! `is_null_texture` is defined for it (MSL 4.1 section 6.13.18: "The behavior of calling any texture member function
 //! with a null texture is undefined"), so its other calls are lowered for the declared type with the canonical
@@ -32,7 +43,11 @@
 //! filter-weight precision or mipmap selection rule to reproduce (WebMetal `tables/formats.toml` question
 //! 5.7-filter-weight-precision; refusal row `address-modes-with-mips-or-anisotropy`). Out-of-bounds reads return the
 //! values MSL 4.1 section 6.13 defines and out-of-bounds writes are skipped; WGSL leaves both to the implementation,
-//! so every read and write is bounds-checked.
+//! so every read and write is bounds-checked. The level of a read or write is in bounds below the level count of the
+//! texture the function is given, a view's own count: Apple silicon writes some out-of-range levels (measured on the
+//! Apple M4: it takes the level modulo 2^16 and lets a write past a view's last level land in the parent's level),
+//! which MSL ignores and the A10X's own behavior is not measured for, so the lowering follows MSL; reads at those
+//! levels are out of bounds on the M4 as well (WebMetal reference case `texture.write-levels`).
 //!
 //! Sampler settings the A10X does not support (mirrorClampToEdge, border colors), cube texture arrays, 2D
 //! multisample arrays and `access::read_write` textures are refused as the device rejects them (the getters of the
@@ -429,6 +444,9 @@ pub(crate) fn texture(cx: &dyn RuleCx, name: &Name, construct: &str, v: Value) -
 /// texture type or a format of another class, and without it such an access is undefined.
 fn check_slot(t: &Tex, name: &Name, construct: &str) -> R<()> {
     let (Some(slot), Some((f, _))) = (&t.slot, &t.format) else { return Ok(()) };
+    if slot.mipmap_level_count == 0 {
+        return Err(refuse("texture-slot-mismatch", construct, "a bound texture of no mipmap levels"));
+    }
     let want = name.dim.texture_type();
     // A 2D argument also takes a 2D view of one face or slice; Metal requires the view's type to match.
     if slot.texture_type != want {
@@ -629,18 +647,34 @@ pub(crate) fn wgsl_type(v: View) -> String {
     }
 }
 
-/// Declare the texture's binding with the given view; returns the WGSL variable.
-pub(crate) fn bind_texture(cx: &mut dyn RuleCx, t: &Tex, view: View) -> R<String> {
-    let resource = match view {
-        View::Sampled(d, s, ms) => BindingResource::Texture { sample_type: s, view_dimension: d, multisampled: ms },
-        View::Storage(d, f) => BindingResource::StorageTexture {
-            access: StorageTextureAccess::WriteOnly,
-            format: f.to_string(),
-            view_dimension: d,
-        },
+/// Declare the texture's binding with the given view; returns the WGSL variable. A storage view is one level: level
+/// `level` of the bound texture, counted from a view's first level (WebGPU 8.2.1: a storage binding's view has one
+/// level); a sampled view shows every level of the bound texture, and `level` is 0.
+pub(crate) fn bind_texture(cx: &mut dyn RuleCx, t: &Tex, view: View, level: u32) -> R<String> {
+    let stage = cx.stage();
+    let (resource, source) = match view {
+        View::Sampled(d, s, ms) => (
+            BindingResource::Texture { sample_type: s, view_dimension: d, multisampled: ms },
+            BindingSource::MetalTexture { stage, index: t.index },
+        ),
+        View::Storage(d, f) => (
+            BindingResource::StorageTexture {
+                access: StorageTextureAccess::WriteOnly,
+                format: f.to_string(),
+                view_dimension: d,
+            },
+            BindingSource::MetalTextureLevel { stage, index: t.index, level },
+        ),
     };
+    debug_assert!(level == 0 || matches!(view, View::Storage(..)));
     let ty = wgsl_type(view);
-    cx.resource(resource, BindingSource::MetalTexture { stage: cx.stage(), index: t.index }, &ty)
+    cx.resource(resource, source, &ty)
+}
+
+/// The mipmap levels a function addresses in the texture: the bound texture's (a view's own), or `None` when no texture
+/// is bound at the slot.
+pub(crate) fn levels(t: &Tex) -> Option<u64> {
+    t.slot.map(|s| s.mipmap_level_count)
 }
 
 pub(crate) fn bind_sampler(cx: &mut dyn RuleCx, s: &Smp, ty: SamplerBindingType) -> R<String> {

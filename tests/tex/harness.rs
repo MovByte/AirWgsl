@@ -57,7 +57,9 @@ pub struct TexIn {
     /// Every level, each level's slices one after the other, rows tightly packed.
     pub data: Vec<u8>,
     pub swizzle: [u8; 4],
-    /// The function writes the texture; its level 0 is read back and compared.
+    /// The levels of the view the function is given, (first level, count); `None` binds the texture itself.
+    pub view_levels: Option<(u32, u32)>,
+    /// The function writes the texture; every level is read back and compared.
     pub write: bool,
     pub samples: u32,
 }
@@ -77,6 +79,7 @@ impl TexIn {
             bpp,
             data,
             swizzle: [2, 3, 4, 5],
+            view_levels: None,
             write: false,
             samples: 1,
         }
@@ -98,7 +101,13 @@ impl TexIn {
             pixel_format: self.format,
             sample_count: self.samples as u64,
             swizzle: self.swizzle,
+            mipmap_level_count: self.bound_levels().1 as u64,
         }
+    }
+
+    /// The levels of the texture the function is given: (first level, count).
+    fn bound_levels(&self) -> (u32, u32) {
+        self.view_levels.unwrap_or((0, self.levels))
     }
 }
 
@@ -161,6 +170,12 @@ pub fn host() -> HostCaps {
 /// Compile the case's kernel with its bindings as the pipeline description.
 #[allow(clippy::result_large_err)]
 pub fn compile_case(c: &Case<'_>, bitcode: &[u8]) -> Result<Compiled, Refusal> {
+    compile_case_on(c, bitcode, &host())
+}
+
+/// [`compile_case`] for a host with the capabilities `host`.
+#[allow(clippy::result_large_err)]
+pub fn compile_case_on(c: &Case<'_>, bitcode: &[u8], host: &HostCaps) -> Result<Compiled, Refusal> {
     let m = AirModule {
         hash: [0; 32],
         bitcode: Arc::from(bitcode),
@@ -183,7 +198,7 @@ pub fn compile_case(c: &Case<'_>, bitcode: &[u8]) -> Result<Compiled, Refusal> {
             argument_buffers: Vec::new(),
         }],
     };
-    compile(&[m], &desc, &host())
+    compile(&[m], &desc, host)
 }
 
 // Real Metal ------------------------------------------------------------------------------------------------------
@@ -233,7 +248,7 @@ pub fn run_metal(dir: &Path, c: &Case<'_>) -> Vec<Vec<u8>> {
         let p = dir.join(format!("mtex{}.bin", t.index));
         std::fs::write(&p, &t.data).unwrap();
         spec.push_str(&format!(
-            "texture {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+            "texture {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
             t.index,
             t.ty,
             t.format,
@@ -248,6 +263,8 @@ pub fn run_metal(dir: &Path, c: &Case<'_>) -> Vec<Vec<u8>> {
             t.swizzle[1],
             t.swizzle[2],
             t.swizzle[3],
+            t.bound_levels().0,
+            t.bound_levels().1,
             p.display()
         ));
         if t.write {
@@ -294,6 +311,8 @@ pub enum Bind {
         writable: bool,
     },
     Texture {
+        /// Bindings with one key share the texture (the levels of a written Metal texture).
+        key: u64,
         format: String,
         dimension: &'static str,
         size: [u32; 3],
@@ -301,6 +320,8 @@ pub enum Bind {
         bpp: u32,
         data: Vec<u8>,
         view: &'static str,
+        /// The levels the view shows: (first level, count).
+        view_levels: (u32, u32),
         storage: bool,
         readback: bool,
     },
@@ -358,7 +379,14 @@ pub fn plan(c: &Case<'_>, compiled: &Compiled) -> Vec<(u32, u32, Bind)> {
                 (BindingSource::MetalBuffer { index, .. }, BindingResource::Buffer { ty, .. }) => {
                     Bind::Buffer { index: *index as usize, writable: *ty == BufferBindingType::Storage }
                 }
-                (BindingSource::MetalTexture { index, .. }, r) => {
+                (
+                    src @ (BindingSource::MetalTexture { index, .. } | BindingSource::MetalTextureLevel { index, .. }),
+                    r,
+                ) => {
+                    let level = match src {
+                        BindingSource::MetalTextureLevel { level, .. } => Some(*level),
+                        _ => None,
+                    };
                     let (view, storage) = match r {
                         BindingResource::Texture { view_dimension, .. } => (*view_dimension, None),
                         BindingResource::StorageTexture { view_dimension, format, .. } => {
@@ -369,7 +397,11 @@ pub fn plan(c: &Case<'_>, compiled: &Compiled) -> Vec<(u32, u32, Bind)> {
                     match c.textures.iter().find(|t| t.index == *index) {
                         Some(t) => {
                             let stored = airwgsl::tex::format::stored(t.format, &host()).unwrap();
+                            // The executor's views: a storage binding is one level of the bound view, a sampled
+                            // binding every level of it.
+                            let (base, count) = t.bound_levels();
                             Bind::Texture {
+                                key: *index,
                                 format: stored.webgpu.to_string(),
                                 dimension: if t.ty == 7 { "3d" } else { "2d" },
                                 size: t.size(),
@@ -377,6 +409,10 @@ pub fn plan(c: &Case<'_>, compiled: &Compiled) -> Vec<(u32, u32, Bind)> {
                                 bpp: t.bpp,
                                 data: t.data.clone(),
                                 view: view_name(view),
+                                view_levels: match level {
+                                    Some(l) => (base + l, 1),
+                                    None => (base, count),
+                                },
                                 storage: storage.is_some(),
                                 readback: t.write,
                             }
@@ -397,7 +433,9 @@ pub fn plan(c: &Case<'_>, compiled: &Compiled) -> Vec<(u32, u32, Bind)> {
                                 _ => ("rgba8unorm".to_string(), 4),
                             };
                             let layers = if matches!(view, TextureViewDimension::Cube) { 6 } else { 1 };
+                            assert_eq!(level.unwrap_or(0), 0, "a placeholder has one level");
                             Bind::Texture {
+                                key: u64::MAX - out.len() as u64,
                                 format,
                                 dimension: if view == TextureViewDimension::D3 { "3d" } else { "2d" },
                                 size: [1, 1, layers],
@@ -405,6 +443,7 @@ pub fn plan(c: &Case<'_>, compiled: &Compiled) -> Vec<(u32, u32, Bind)> {
                                 bpp,
                                 data: vec![0; bpp as usize * layers as usize],
                                 view: view_name(view),
+                                view_levels: (0, 1),
                                 storage: storage.is_some(),
                                 readback: false,
                             }
@@ -791,7 +830,16 @@ pub fn run_wgpu(c: &Case<'_>, compiled: &Compiled, plan: &[(u32, u32, Bind)]) ->
         Smp(wgpu::Sampler),
     }
     let mut res: Vec<(u32, u32, Res)> = Vec::new();
-    let mut readbacks: Vec<(wgpu::Texture, [u32; 3], u32)> = Vec::new();
+    // (texture, size, bytes per texel, levels, 3D) of each texture read back.
+    let mut readbacks: Vec<(wgpu::Texture, [u32; 3], u32, u32, bool)> = Vec::new();
+    let mut textures: std::collections::HashMap<u64, wgpu::Texture> = std::collections::HashMap::new();
+    let storage_keys: std::collections::HashSet<u64> = plan
+        .iter()
+        .filter_map(|(_, _, b)| match b {
+            Bind::Texture { key, storage: true, .. } => Some(*key),
+            _ => None,
+        })
+        .collect();
     for (grp, bind, b) in plan {
         let r = match b {
             Bind::Uniform(bytes) => Res::Buf(d.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -800,11 +848,36 @@ pub fn run_wgpu(c: &Case<'_>, compiled: &Compiled, plan: &[(u32, u32, Bind)]) ->
                 usage: wgpu::BufferUsages::UNIFORM,
             })),
             Bind::Buffer { index, .. } => Res::Buf(bufs[*index].clone()),
-            Bind::Texture { format, dimension, size, levels, bpp, data, view, storage, readback } => {
+            Bind::Texture {
+                key,
+                format,
+                dimension,
+                size,
+                levels,
+                bpp,
+                data,
+                view,
+                view_levels,
+                storage: _,
+                readback,
+            } => {
+                if let Some(tex) = textures.get(key) {
+                    res.push((
+                        *grp,
+                        *bind,
+                        Res::View(tex.create_view(&wgpu::TextureViewDescriptor {
+                            dimension: Some(wgpu_view(view)),
+                            base_mip_level: view_levels.0,
+                            mip_level_count: Some(view_levels.1),
+                            ..Default::default()
+                        })),
+                    ));
+                    continue;
+                }
                 let mut usage = wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_DST
                     | wgpu::TextureUsages::COPY_SRC;
-                if *storage {
+                if storage_keys.contains(key) {
                     usage |= wgpu::TextureUsages::STORAGE_BINDING;
                 }
                 let tex = d.create_texture(&wgpu::TextureDescriptor {
@@ -842,12 +915,14 @@ pub fn run_wgpu(c: &Case<'_>, compiled: &Compiled, plan: &[(u32, u32, Bind)]) ->
                 }
                 let v = tex.create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(wgpu_view(view)),
-                    mip_level_count: if *storage { Some(1) } else { None },
+                    base_mip_level: view_levels.0,
+                    mip_level_count: Some(view_levels.1),
                     ..Default::default()
                 });
                 if *readback {
-                    readbacks.push((tex, *size, *bpp));
+                    readbacks.push((tex.clone(), *size, *bpp, *levels, *dimension == "3d"));
                 }
+                textures.insert(*key, tex);
                 Res::View(v)
             }
             Bind::Sampler { modes, mag, min, mip, lod, compare } => {
@@ -910,59 +985,70 @@ pub fn run_wgpu(c: &Case<'_>, compiled: &Compiled, plan: &[(u32, u32, Bind)]) ->
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(b, 0, &r, 0, b.size());
-        reads.push((r, None));
+        reads.push(r);
     }
-    for (tex, size, bpp) in &readbacks {
-        let row = (size[0] * bpp).div_ceil(256) * 256;
-        let r = d.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: (row * size[1] * size[2]) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &r,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(size[1]),
+    // Every level of a texture read back, one buffer each, joined into one output.
+    let mut level_reads: Vec<Vec<(wgpu::Buffer, [u32; 3], u32)>> = Vec::new();
+    for (tex, size, bpp, levels, three_d) in &readbacks {
+        let mut per_level = Vec::new();
+        for l in 0..*levels {
+            let extent =
+                [(size[0] >> l).max(1), (size[1] >> l).max(1), if *three_d { (size[2] >> l).max(1) } else { size[2] }];
+            let row = (extent[0] * bpp).div_ceil(256) * 256;
+            let r = d.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (row * extent[1] * extent[2]) as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex,
+                    mip_level: l,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-            },
-            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: size[2] },
-        );
-        reads.push((r, Some((*size, *bpp, row))));
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &r,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: Some(extent[1]),
+                    },
+                },
+                wgpu::Extent3d { width: extent[0], height: extent[1], depth_or_array_layers: extent[2] },
+            );
+            per_level.push((r, extent, row));
+        }
+        level_reads.push(per_level);
     }
     g.queue.submit([enc.finish()]);
     if let Some(e) = pollster::block_on(scope.pop()) {
         panic!("{}: wgpu validation: {}\n{}", c.name, e, compiled.wgsl[0].source);
     }
     let mut out = Vec::new();
-    for (k, (r, tex)) in reads.iter().enumerate() {
+    for (k, r) in reads.iter().enumerate() {
         let s = r.slice(..);
         s.map_async(wgpu::MapMode::Read, |_| {});
         d.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let all = s.get_mapped_range();
-        out.push(match tex {
-            None => all[..c.buffers[k].len()].to_vec(),
-            Some((size, bpp, row)) => {
-                let tight = (size[0] * bpp) as usize;
-                let mut v = Vec::new();
-                for z in 0..size[2] {
-                    for y in 0..size[1] {
-                        let o = ((z * size[1] + y) * row) as usize;
-                        v.extend_from_slice(&all[o..o + tight]);
-                    }
+        out.push(s.get_mapped_range()[..c.buffers[k].len()].to_vec());
+    }
+    for (per_level, (_, _, bpp, _, _)) in level_reads.iter().zip(&readbacks) {
+        let mut v = Vec::new();
+        for (r, extent, row) in per_level {
+            let s = r.slice(..);
+            s.map_async(wgpu::MapMode::Read, |_| {});
+            d.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let all = s.get_mapped_range();
+            let tight = (extent[0] * bpp) as usize;
+            for z in 0..extent[2] {
+                for y in 0..extent[1] {
+                    let o = ((z * extent[1] + y) * row) as usize;
+                    v.extend_from_slice(&all[o..o + tight]);
                 }
-                v
             }
-        });
+        }
+        out.push(v);
     }
     out
 }
@@ -1000,19 +1086,24 @@ pub fn run_dawn(dawn: &Path, dir: &Path, c: &Case<'_>, compiled: &Compiled, plan
                     json_str(&p.display().to_string())
                 )
             }
-            Bind::Texture { format, dimension, size, levels, bpp, data, view, storage, readback } => {
+            Bind::Texture { key, format, dimension, size, levels, bpp, data, view, view_levels, storage, readback } => {
                 let p = dir.join(format!("dtex{}.bin", n));
                 std::fs::write(&p, data).unwrap();
-                let rb = if *readback {
+                let first = !plan[..n].iter().any(|(_, _, b)| matches!(b, Bind::Texture { key: k, .. } if k == key));
+                let rb = if *readback && first {
                     let r = dir.join(format!("dtex{}.out", n));
                     tex_out.push(r.clone());
                     format!(",\"readback\":{}", json_str(&r.display().to_string()))
                 } else {
                     String::new()
                 };
+                let storage_key =
+                    plan.iter().any(|(_, _, b)| matches!(b, Bind::Texture { key: k, storage: true, .. } if k == key));
                 format!(
-                    "{{\"kind\":\"texture\",\"format\":\"{}\",\"dimension\":\"{}\",\"size\":[{},{},{}],\"levels\":{},\
-                     \"bpp\":{},\"view\":\"{}\",\"storage\":{},\"file\":{}{}}}",
+                    "{{\"kind\":\"texture\",\"key\":\"{}\",\"format\":\"{}\",\"dimension\":\"{}\",\"size\":[{},{},{}],\
+                     \"levels\":{},\"bpp\":{},\"view\":\"{}\",\"baseMipLevel\":{},\"mipLevelCount\":{},\"storage\":{},\
+                     \"storageUsage\":{},\"file\":{}{}}}",
+                    key,
                     format,
                     dimension,
                     size[0],
@@ -1021,7 +1112,10 @@ pub fn run_dawn(dawn: &Path, dir: &Path, c: &Case<'_>, compiled: &Compiled, plan
                     levels,
                     bpp,
                     view,
+                    view_levels.0,
+                    view_levels.1,
                     storage,
+                    storage_key,
                     json_str(&p.display().to_string()),
                     rb
                 )

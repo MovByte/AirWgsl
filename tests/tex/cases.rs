@@ -283,6 +283,204 @@ fn writes_round_saturate_and_skip_out_of_bounds() {
     );
 }
 
+const WRITE_LEVELS: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+// q[i] = (x, y, slice, face or z, level).xyzw with the level in w.
+kernel void l2(texture2d<uint, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+               uint i [[thread_position_in_grid]])
+{ t.write(uint4(0xc0de0000u | i, 0, 0, 0), q[i].xy, q[i].w); }
+kernel void l2s(texture2d<uint, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+                uint i [[thread_position_in_grid]])
+{ t.write(uint4(0xc0de0000u | i, 0, 0, 0), ushort2(q[i].xy), ushort(q[i].w)); }
+kernel void la(texture2d_array<uint, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+               uint i [[thread_position_in_grid]])
+{ t.write(uint4(0xc0de0000u | i, 0, 0, 0), q[i].xy, q[i].z, q[i].w); }
+kernel void l3(texture3d<uint, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+               uint i [[thread_position_in_grid]])
+{ t.write(uint4(0xc0de0000u | i, 0, 0, 0), q[i].xyz, q[i].w); }
+kernel void lc(texturecube<uint, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+               uint i [[thread_position_in_grid]])
+{ t.write(uint4(0xc0de0000u | i, 0, 0, 0), q[i].xy, q[i].z, q[i].w); }
+kernel void lf(texture2d<float, access::write> t [[texture(0)]], device const uint4 *q [[buffer(0)]],
+               uint i [[thread_position_in_grid]])
+{ t.write(float4(0.25 * float(i % 5), 1.0, 0.5, 0.0), q[i].xy, q[i].w); }
+kernel void lk(texture2d<uint, access::write> t [[texture(0)]], device uint *o [[buffer(1)]],
+               uint i [[thread_position_in_grid]])
+{
+    t.write(uint4(0xc0de0000u | i, 0, 0, 0), uint2(i, 0), 2);
+    t.write(uint4(7), uint2(i, 1), 9);
+    if (i == 0) {
+        o[0] = t.get_num_mip_levels();
+        o[1] = t.get_width(1);
+        o[2] = t.get_height(2);
+    }
+}
+"#;
+
+/// R32Uint texels `0xa0LLZZXX`-style for every level of a `w` x `h` x `d` 3D texture: level, depth, row, column.
+fn r32_volume(w: u32, h: u32, d: u32, levels: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    for l in 0..levels {
+        let (lw, lh, ld) = ((w >> l).max(1), (h >> l).max(1), (d >> l).max(1));
+        for z in 0..ld {
+            for y in 0..lh {
+                for x in 0..lw {
+                    v.push(0xa000_0000 | (l << 24) | (z << 16) | (y << 8) | x);
+                }
+            }
+        }
+    }
+    u32s(&v)
+}
+
+/// One kernel writing texture 0 at the queried coordinates and levels, compared with Metal level by level. The
+/// queries keep to levels this Mac's GPU leaves alone when they are out of range: a level whose low 16 bits, added to
+/// a view's first level, name a level of the parent is written there by Apple silicon, where MSL 4.1 section 6.13
+/// ignores the write (WebMetal's reference case texture.write-levels records it).
+fn level_case(name: &str, function: &str, tex: TexIn, queries: &[[u32; 4]]) {
+    let mut c = Case::new(name, WRITE_LEVELS, function);
+    c.threads = [queries.len() as u64, 1, 1];
+    c.buffers = vec![u32s(&queries.concat())];
+    let mut t = tex;
+    t.write = true;
+    c.textures = vec![t];
+    report(c.name, differential(&c));
+}
+
+/// Out-of-range levels of a texture of `levels` levels that Apple silicon ignores as MSL does.
+const OUT_OF_RANGE: [u32; 6] = [31, 32, 0xffff, 0x7fff_ffff, 0xffff_fffc, 0xffff_ffff];
+
+#[test]
+fn writes_at_levels_computed_at_run_time() {
+    let mut q2 = vec![
+        [1, 1, 0, 0],
+        [2, 1, 0, 1],
+        [1, 0, 0, 2],
+        [0, 0, 0, 3],
+        [7, 7, 0, 0],
+        [3, 3, 0, 1],
+        [4, 0, 0, 1],
+        [2, 0, 0, 2],
+        [3, 3, 0, 4],
+        [0, 1, 0, 5],
+    ];
+    q2.extend(OUT_OF_RANGE.iter().map(|&l| [0, 0, 0, l]));
+    level_case("levels_2d", "l2", TexIn::new(0, 2, 53, [8, 8, 1], 4, 4, r32_levels(8, 8, 1, 4)), &q2);
+    // 16-bit coordinates and level: the level is converted to ushort in the function.
+    let q2s = [[1, 1, 0, 0], [2, 1, 0, 0x1_0001], [0, 0, 0, 3], [0, 0, 0, 0xffff], [1, 1, 0, 0x2_0004]];
+    level_case("levels_2d_short", "l2s", TexIn::new(0, 2, 53, [8, 8, 1], 4, 4, r32_levels(8, 8, 1, 4)), &q2s);
+    // A view of levels 1 and 2: its level 0 is the parent's level 1; its level 2 would be the parent's level 3.
+    let mut view = TexIn::new(0, 2, 53, [8, 8, 1], 4, 4, r32_levels(8, 8, 1, 4));
+    view.view_levels = Some((1, 2));
+    level_case(
+        "levels_2d_view",
+        "l2",
+        view,
+        &[[3, 2, 0, 0], [1, 1, 0, 1], [0, 0, 0, 0], [2, 0, 0, 1], [0, 0, 0, 3], [1, 1, 0, 0xffff_ffff]],
+    );
+    let mut qa = vec![[1, 0, 1, 0], [0, 1, 2, 1], [0, 0, 0, 2], [3, 3, 2, 0], [0, 0, 3, 0], [0, 0, 0, 3]];
+    qa.extend(OUT_OF_RANGE.iter().map(|&l| [1, 1, 1, l]));
+    level_case("levels_2d_array", "la", TexIn::new(0, 3, 53, [4, 4, 3], 3, 4, r32_levels(4, 4, 3, 3)), &qa);
+    let mut array_view = TexIn::new(0, 3, 53, [4, 4, 3], 3, 4, r32_levels(4, 4, 3, 3));
+    array_view.view_levels = Some((1, 2));
+    level_case(
+        "levels_2d_array_view",
+        "la",
+        array_view,
+        &[[1, 1, 2, 0], [0, 0, 1, 1], [0, 0, 0, 2], [2, 0, 0, 0], [0, 0, 3, 1]],
+    );
+    let mut q3 = vec![[1, 2, 3, 0], [1, 0, 1, 1], [0, 0, 0, 2], [0, 0, 1, 2], [0, 0, 0, 3]];
+    q3.extend(OUT_OF_RANGE.iter().map(|&l| [0, 0, 0, l]));
+    level_case("levels_3d", "l3", TexIn::new(0, 7, 53, [4, 4, 4], 3, 4, r32_volume(4, 4, 4, 3)), &q3);
+    let mut qc = vec![[3, 0, 0, 0], [1, 1, 2, 1], [0, 0, 5, 2], [0, 0, 6, 1], [0, 0, 1, 3]];
+    qc.extend(OUT_OF_RANGE.iter().map(|&l| [1, 1, 3, l]));
+    level_case("levels_cube", "lc", TexIn::new(0, 5, 53, [4, 4, 1], 3, 4, r32_levels(4, 4, 6, 3)), &qc);
+    // A float write converted to RGBA8Unorm at each level.
+    let qf: Vec<[u32; 4]> = (0..3).flat_map(|l| (0..4 >> l).map(move |x| [x, 0, 0, l])).chain([[0, 0, 0, 3]]).collect();
+    level_case("levels_rgba8", "lf", TexIn::new(0, 2, 70, [4, 4, 1], 3, 4, vec![0x11; 84]), &qf);
+}
+
+#[test]
+fn writes_at_constant_levels_and_level_queries() {
+    let run = |name: &str, t: TexIn| {
+        let mut c = Case::new(name, WRITE_LEVELS, "lk");
+        c.threads = [4, 1, 1];
+        c.buffers = vec![vec![0; 4], vec![0; 12]];
+        let mut t = t;
+        t.write = true;
+        c.textures = vec![t];
+        // The writes bind level 2 alone; the write at level 9 is out of range and has no binding.
+        let bc = air(&case_dir(name), WRITE_LEVELS, &[]);
+        let compiled = compile_case(&c, &bc).unwrap();
+        let mut levels: Vec<u32> = compiled
+            .layout
+            .groups
+            .iter()
+            .flat_map(|g| &g.entries)
+            .filter_map(|e| match e.source {
+                airwgsl::api::BindingSource::MetalTextureLevel { level, .. } => Some(level),
+                _ => None,
+            })
+            .collect();
+        levels.sort();
+        // Level 0 serves the size queries.
+        assert_eq!(levels, [0, 2], "{}: the level bindings", name);
+        report(c.name, differential(&c));
+    };
+    run("levels_constant", TexIn::new(0, 2, 53, [8, 8, 1], 4, 4, r32_levels(8, 8, 1, 4)));
+    let mut view = TexIn::new(0, 2, 53, [16, 16, 1], 5, 4, r32_levels(16, 16, 1, 5));
+    view.view_levels = Some((1, 3));
+    run("levels_constant_view", view);
+}
+
+#[test]
+fn reads_through_level_range_views() {
+    // Levels 1 to 3 of a 5-level texture: the view's level 3 is the parent's level 4, out of the view.
+    let mut t = TexIn::new(0, 2, 53, [16, 16, 1], 5, 4, r32_levels(16, 16, 1, 5));
+    t.view_levels = Some((1, 3));
+    let mut c = Case::new("read_level_view", READ_2D, "k");
+    let q: Vec<[u32; 4]> = vec![
+        [0, 0, 0, 0],
+        [7, 7, 0, 0],
+        [3, 3, 1, 0],
+        [1, 1, 2, 0],
+        [0, 0, 3, 0],
+        [0, 0, 0xffff_ffff, 0],
+        [8, 0, 0, 0],
+    ];
+    c.threads = [q.len() as u64, 1, 1];
+    c.buffers = vec![u32s(&q.concat()), vec![0; 33 * 16]];
+    c.textures = vec![t];
+    report(c.name, differential(&c));
+}
+
+#[test]
+fn level_bindings_past_the_storage_texture_limit_are_refused() {
+    let mut c = Case::new("levels_limit", WRITE_LEVELS, "l2");
+    c.buffers = vec![vec![0; 16]];
+    let mut t = TexIn::new(0, 2, 53, [4096, 4096, 1], 13, 4, Vec::new());
+    t.write = true;
+    c.textures = vec![t];
+    let bc = air(&case_dir(c.name), WRITE_LEVELS, &[]);
+    let mut h = host();
+    h.limits.insert("maxStorageTexturesPerShaderStage".into(), 8);
+    let r = compile_case_on(&c, &bc, &h).unwrap_err();
+    assert_eq!(r.kind, airwgsl::api::RefusalKind::HostUnsupported, "{}", r);
+    assert!(r.reason.starts_with("[compiler:texture-write-level]"), "{}", r);
+    assert!(r.reason.contains("texture 0 binds 13 levels") && r.reason.contains("is 8"), "{}", r);
+    h.limits.insert("maxStorageTexturesPerShaderStage".into(), 13);
+    let compiled = compile_case_on(&c, &bc, &h).unwrap();
+    let storage = compiled
+        .layout
+        .groups
+        .iter()
+        .flat_map(|g| &g.entries)
+        .filter(|e| matches!(e.resource, airwgsl::api::BindingResource::StorageTexture { .. }))
+        .count();
+    assert_eq!(storage, 13);
+}
+
 const SAMPLE: &str = r#"
 #include <metal_stdlib>
 using namespace metal;

@@ -401,10 +401,12 @@ msl = "texture read and write member functions (6.13)"
 decision = "lowering"
 owner = "S6a"
 wgsl = "textureLoad, textureStore"
-reason = "Read-only and write-only access map to textureLoad on sampled or read-only storage textures and textureStore on write-only storage textures; formats that are not storage-capable on the host are LOUD at pipeline creation; texture buffers go through the memory model (plan 5.7). access::read_write is above the A10X's family (family texture-fence)."
+reason = "Read-only and write-only access map to textureLoad on sampled or read-only storage textures and textureStore on write-only storage textures; a storage binding is one level, so a write at a level computed at run time selects among a storage binding of each level of the bound texture (a view's own levels), and a level out of that range is ignored as an out-of-bounds write; formats that are not storage-capable on the host are LOUD at pipeline creation; texture buffers go through the memory model (plan 5.7). access::read_write is above the A10X's family (family texture-fence)."
 probe = ["tex_read_2d", "tex_write_2d", "tex_read_2d_ms", "tex_buffer"]
 cite = [
   { src = "msl", ref = "2.9", quote = "read — Without a sampler, a graphics or kernel function can only read the texture object." },
+  { src = "msl", ref = "6.13", quote = "For all texture types, an out-of-bounds write to a texture is ignored." },
+  { src = "webgpu", ref = "#bind-group-creation", quote = "storageTextureView.[[descriptor]].mipLevelCount must be 1." },
   { src = "wgsl", ref = "#textureload", quote = "17.7.4. textureLoad" },
   { src = "wgsl", ref = "#texturestore", quote = "17.7.15. textureStore" },
   { measure = "air-probe", case = "tex_read_2d", quote = "air.read_texture_2d.v4f32" },

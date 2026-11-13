@@ -4,9 +4,10 @@
 // Usage: node dawn_tex.cjs DAWN_NODE PLAN.json
 //
 // The plan names the shader, its entry point, the workgroup count, and each binding: `uniform`, `storage` and
-// `read-only-storage` buffers from a file (storage buffers are written back to FILE.out), textures (format, dimension,
-// size, level count, bytes per texel, the view's dimension, whether it is a storage binding, the data file holding every
-// level with its layers one after the other, and an optional readback file for level 0), and samplers (a
+// `read-only-storage` buffers from a file (storage buffers are written back to FILE.out), textures (a key that bindings
+// of one texture share, format, dimension, size, level count, bytes per texel, the view's dimension and levels, whether
+// it is a storage binding and whether the texture has storage usage, the data file holding every level with its layers
+// one after the other, and an optional readback file for every level, levels one after the other), and samplers (a
 // GPUSamplerDescriptor), with the bind group layouts of the compiled layout. Any validation error, uncaptured error or
 // device loss fails the run.
 
@@ -38,30 +39,33 @@ async function main() {
   const byGroup = new Map();
   const outs = [];
   const readbacks = [];
+  const textures = new Map();
   for (const b of plan.bindings) {
     let resource;
     if (b.kind === 'sampler') {
       resource = device.createSampler(b.desc);
     } else if (b.kind === 'texture') {
-      let usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC;
-      if (b.storage) usage |= GPUTextureUsage.STORAGE_BINDING;
-      const tex = device.createTexture({
-        format: b.format, dimension: b.dimension, size: b.size, mipLevelCount: b.levels, usage,
-      });
-      const data = fs.readFileSync(b.file);
-      let off = 0;
-      for (let l = 0; l < b.levels; l++) {
-        const w = Math.max(1, b.size[0] >> l);
-        const h = Math.max(1, b.size[1] >> l);
-        const layers = b.dimension === '3d' ? Math.max(1, b.size[2] >> l) : b.size[2];
-        const n = w * h * layers * b.bpp;
-        device.queue.writeTexture({ texture: tex, mipLevel: l }, data.subarray(off, off + n),
-          { bytesPerRow: w * b.bpp, rowsPerImage: h }, [w, h, layers]);
-        off += n;
+      let tex = textures.get(b.key);
+      if (!tex) {
+        let usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC;
+        if (b.storageUsage) usage |= GPUTextureUsage.STORAGE_BINDING;
+        tex = device.createTexture({
+          format: b.format, dimension: b.dimension, size: b.size, mipLevelCount: b.levels, usage,
+        });
+        const data = fs.readFileSync(b.file);
+        let off = 0;
+        for (let l = 0; l < b.levels; l++) {
+          const w = Math.max(1, b.size[0] >> l);
+          const h = Math.max(1, b.size[1] >> l);
+          const layers = b.dimension === '3d' ? Math.max(1, b.size[2] >> l) : b.size[2];
+          const n = w * h * layers * b.bpp;
+          device.queue.writeTexture({ texture: tex, mipLevel: l }, data.subarray(off, off + n),
+            { bytesPerRow: w * b.bpp, rowsPerImage: h }, [w, h, layers]);
+          off += n;
+        }
+        textures.set(b.key, tex);
       }
-      const view = { dimension: b.view };
-      if (b.storage) { view.baseMipLevel = 0; view.mipLevelCount = 1; }
-      resource = tex.createView(view);
+      resource = tex.createView({ dimension: b.view, baseMipLevel: b.baseMipLevel, mipLevelCount: b.mipLevelCount });
       if (b.readback) readbacks.push({ tex, b });
     } else {
       const data = fs.readFileSync(b.file);
@@ -92,11 +96,16 @@ async function main() {
     return r;
   });
   const texReads = readbacks.map(({ tex, b }) => {
-    const row = Math.ceil(b.size[0] * b.bpp / 256) * 256;
-    const layers = b.size[2];
-    const r = device.createBuffer({ size: row * b.size[1] * layers, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    enc.copyTextureToBuffer({ texture: tex }, { buffer: r, bytesPerRow: row, rowsPerImage: b.size[1] }, [b.size[0], b.size[1], layers]);
-    return { r, row, b };
+    const levels = [];
+    for (let l = 0; l < b.levels; l++) {
+      const extent = [Math.max(1, b.size[0] >> l), Math.max(1, b.size[1] >> l),
+        b.dimension === '3d' ? Math.max(1, b.size[2] >> l) : b.size[2]];
+      const row = Math.ceil(extent[0] * b.bpp / 256) * 256;
+      const r = device.createBuffer({ size: row * extent[1] * extent[2], usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      enc.copyTextureToBuffer({ texture: tex, mipLevel: l }, { buffer: r, bytesPerRow: row, rowsPerImage: extent[1] }, extent);
+      levels.push({ r, row, extent });
+    }
+    return { levels, b };
   });
   device.queue.submit([enc.finish()]);
   const err = await device.popErrorScope();
@@ -105,18 +114,22 @@ async function main() {
     await reads[i].mapAsync(GPUMapMode.READ);
     fs.writeFileSync(outs[i].file + '.out', new Uint8Array(reads[i].getMappedRange()).slice(0, outs[i].length));
   }
-  for (const { r, row, b } of texReads) {
-    await r.mapAsync(GPUMapMode.READ);
-    const all = new Uint8Array(r.getMappedRange());
-    const tight = b.size[0] * b.bpp;
-    const out = new Uint8Array(tight * b.size[1] * b.size[2]);
-    for (let z = 0; z < b.size[2]; z++) {
-      for (let y = 0; y < b.size[1]; y++) {
-        const src = (z * b.size[1] + y) * row;
-        out.set(all.subarray(src, src + tight), (z * b.size[1] + y) * tight);
+  for (const { levels, b } of texReads) {
+    const parts = [];
+    for (const { r, row, extent } of levels) {
+      await r.mapAsync(GPUMapMode.READ);
+      const all = new Uint8Array(r.getMappedRange());
+      const tight = extent[0] * b.bpp;
+      const out = new Uint8Array(tight * extent[1] * extent[2]);
+      for (let z = 0; z < extent[2]; z++) {
+        for (let y = 0; y < extent[1]; y++) {
+          const src = (z * extent[1] + y) * row;
+          out.set(all.subarray(src, src + tight), (z * extent[1] + y) * tight);
+        }
       }
+      parts.push(out);
     }
-    fs.writeFileSync(b.readback, out);
+    fs.writeFileSync(b.readback, Buffer.concat(parts));
   }
   if (uncaptured) throw new Error(`uncaptured: ${uncaptured}`);
   device.destroy();

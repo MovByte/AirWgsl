@@ -160,6 +160,7 @@ impl Layout {
         };
         match source {
             BindingSource::MetalTexture { index, .. } => format!("aw_t{}{}", s, index),
+            BindingSource::MetalTextureLevel { index, level, .. } => format!("aw_t{}{}_l{}", s, index, level),
             BindingSource::MetalSampler { index, .. } => format!("aw_s{}{}", s, index),
             BindingSource::ArgumentBufferMember { buffer_index, argument_id, .. } => {
                 format!("aw_ab{}{}_{}", s, buffer_index, argument_id)
@@ -239,6 +240,69 @@ impl Layout {
                         format!("{:?} stage needs {} storage buffers; the host's {} is {}", stage, n, name, limit),
                     ));
                 }
+            }
+        }
+        self.check_storage_textures(host)
+    }
+
+    /// The stages' storage textures against the host's limits. A texture written at a level computed at run time takes
+    /// one storage binding per level ([`BindingSource::MetalTextureLevel`]); when those bindings pass the limit, the
+    /// refusal names the textures and their levels.
+    fn check_storage_textures(&self, host: &HostCaps) -> Result<(), Refusal> {
+        let mut per_stage: BTreeMap<MetalStage, BTreeMap<u64, u64>> = BTreeMap::new();
+        let mut other: BTreeMap<MetalStage, u64> = BTreeMap::new();
+        for r in &self.resources {
+            if !matches!(r.resource, BindingResource::StorageTexture { .. }) {
+                continue;
+            }
+            match r.source {
+                BindingSource::MetalTextureLevel { index, .. } => {
+                    *per_stage.entry(r.stage).or_default().entry(index).or_default() += 1;
+                }
+                _ => *other.entry(r.stage).or_default() += 1,
+            }
+        }
+        let stages: std::collections::BTreeSet<MetalStage> = per_stage.keys().chain(other.keys()).copied().collect();
+        for stage in stages {
+            let levels = per_stage.get(&stage).cloned().unwrap_or_default();
+            let n = levels.values().sum::<u64>() + other.get(&stage).copied().unwrap_or(0);
+            let names: &[&str] = match stage {
+                MetalStage::Vertex => &["maxStorageTexturesInVertexStage", "maxStorageTexturesPerShaderStage"],
+                MetalStage::Fragment => &["maxStorageTexturesInFragmentStage", "maxStorageTexturesPerShaderStage"],
+                _ => &["maxStorageTexturesPerShaderStage"],
+            };
+            for name in names {
+                let Some(&limit) = host.limits.get(*name) else { continue };
+                if n <= limit {
+                    continue;
+                }
+                let multi: Vec<String> = levels
+                    .iter()
+                    .filter(|(_, k)| **k > 1)
+                    .map(|(index, k)| format!("texture {} binds {} levels", index, k))
+                    .collect();
+                if multi.is_empty() {
+                    return Err(tracked::refuse(
+                        "host-limit",
+                        name.to_string(),
+                        None,
+                        format!("{:?} stage needs {} storage textures; the host's {} is {}", stage, n, name, limit),
+                    ));
+                }
+                return Err(tracked::refuse(
+                    "texture-write-level",
+                    name.to_string(),
+                    None,
+                    format!(
+                        "{:?} stage needs {} storage textures: a texture written at a level computed at run time has \
+                         a storage binding for each of its levels ({}); the host's {} is {}",
+                        stage,
+                        n,
+                        multi.join(", "),
+                        name,
+                        limit
+                    ),
+                ));
             }
         }
         Ok(())

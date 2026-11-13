@@ -9,14 +9,15 @@
 //   threads TX TY TZ
 //   groups GX GY GZ
 //   buffer INDEX FILE                     bound at INDEX; written back to FILE.out after the dispatch
-//   texture INDEX TYPE FORMAT W H D ARRAY LEVELS BPP WRITE SR SG SB SA FILE
+//   texture INDEX TYPE FORMAT W H D ARRAY LEVELS BPP WRITE SR SG SB SA VBASE VCOUNT FILE
 //                                         MTLTextureType, MTLPixelFormat, size, array length, mipmap levels, bytes per
-//                                         texel, 1 when the function writes it, the view swizzle (MTLTextureSwizzle);
-//                                         FILE holds every level, each level's slices (faces) one after the other,
-//                                         rows tightly packed
+//                                         texel, 1 when the function writes it, the view swizzle (MTLTextureSwizzle),
+//                                         the levels of the view bound (first level and count); FILE holds every
+//                                         level, each level's slices (faces) one after the other, rows tightly packed
 //   null INDEX                            no texture at INDEX (setTexture:nil)
 //   sampler INDEX MIN MAG MIP S T R NORMALIZED COMPARE ANISOTROPY LODMIN LODMAX
-//   readback INDEX FILE                   level 0 of the texture at INDEX, all slices, written to FILE
+//   readback INDEX FILE                   every level of the texture at INDEX, each level's slices one after the
+//                                         other, written to FILE
 
 import Foundation
 import Metal
@@ -67,7 +68,7 @@ for line in spec.split(separator: "\n") {
         }
         buffers.append((Int(f[1])!, b, f[2], data.count))
     case "texture":
-        let v = f[1...14].map { Int($0)! }
+        let v = f[1...16].map { Int($0)! }
         let (index, type, format, w, h, d, array, levels, bpp, write) =
             (v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9])
         let desc = MTLTextureDescriptor()
@@ -83,7 +84,7 @@ for line in spec.split(separator: "\n") {
         if write == 1 { usage.insert(.shaderWrite) }
         desc.usage = usage
         guard let t = device.makeTexture(descriptor: desc) else { fail("texture \(index)") }
-        let data = try! Data(contentsOf: URL(fileURLWithPath: f[15]))
+        let data = try! Data(contentsOf: URL(fileURLWithPath: f[17]))
         let staging = data.withUnsafeBytes {
             device.makeBuffer(bytes: $0.baseAddress!, length: max(data.count, 16), options: .storageModeShared)!
         }
@@ -107,9 +108,9 @@ for line in spec.split(separator: "\n") {
                                            blue: MTLTextureSwizzle(rawValue: UInt8(v[12]))!,
                                            alpha: MTLTextureSwizzle(rawValue: UInt8(v[13]))!)
         var bound: MTLTexture = t
-        if v[10] != 2 || v[11] != 3 || v[12] != 4 || v[13] != 5 {
+        if v[10] != 2 || v[11] != 3 || v[12] != 4 || v[13] != 5 || v[14] != 0 || v[15] != levels {
             bound = t.makeTextureView(pixelFormat: t.pixelFormat, textureType: t.textureType,
-                                      levels: 0..<levels, slices: 0..<slices, swizzle: sw)!
+                                      levels: v[14]..<v[14] + v[15], slices: 0..<slices, swizzle: sw)!
         }
         textures.append((index, bound))
         storedTextures[index] = (t, bpp, slices)
@@ -161,15 +162,25 @@ for (_, b, path, n) in buffers {
 }
 for (index, path) in readbacks {
     let (t, bpp, slices) = storedTextures[index]!
-    let image = t.width * t.height * bpp * (t.textureType == .type3D ? t.depth : 1)
-    let out = device.makeBuffer(length: image * slices, options: .storageModeShared)!
+    var total = 0
+    for l in 0..<t.mipmapLevelCount {
+        let ld = t.textureType == .type3D ? max(1, t.depth >> l) : 1
+        total += max(1, t.width >> l) * max(1, t.height >> l) * ld * bpp * slices
+    }
+    let out = device.makeBuffer(length: max(total, 16), options: .storageModeShared)!
     blit { e in
-        for s in 0..<slices {
-            e.copy(from: t, sourceSlice: s, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                   sourceSize: MTLSize(width: t.width, height: t.height, depth: t.textureType == .type3D ? t.depth : 1),
-                   to: out, destinationOffset: s * image, destinationBytesPerRow: t.width * bpp,
-                   destinationBytesPerImage: t.width * t.height * bpp)
+        var offset = 0
+        for l in 0..<t.mipmapLevelCount {
+            let lw = max(1, t.width >> l), lh = max(1, t.height >> l)
+            let ld = t.textureType == .type3D ? max(1, t.depth >> l) : 1
+            let image = lw * lh * bpp
+            for s in 0..<slices {
+                e.copy(from: t, sourceSlice: s, sourceLevel: l, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                       sourceSize: MTLSize(width: lw, height: lh, depth: ld), to: out, destinationOffset: offset,
+                       destinationBytesPerRow: lw * bpp, destinationBytesPerImage: image)
+                offset += image * ld
+            }
         }
     }
-    try! Data(bytes: out.contents(), count: image * slices).write(to: URL(fileURLWithPath: path))
+    try! Data(bytes: out.contents(), count: total).write(to: URL(fileURLWithPath: path))
 }
