@@ -198,21 +198,10 @@ fn storage_format(cx: &dyn RuleCx, t: &Tex, c: &str) -> R<&'static str> {
     }
 }
 
-/// Bind the texture for the call's op.
+/// Bind the texture for the call's op: a written texture's binding is its level 0 ([`bind_level`]).
 fn bind(cx: &mut dyn RuleCx, n: &Name, t: &Tex, c: &str) -> R<String> {
     if t.access == Access::Write {
-        if cx.stage() == MetalStage::Vertex {
-            return Err(tracked::refuse_row(
-                "vertex-stage-writes",
-                RefusalKind::NoExactLowering,
-                c.to_string(),
-                None,
-                "a vertex function writes a texture",
-                "WebGPU 8.1.1 bind group layout creation",
-            ));
-        }
-        let fmt = storage_format(cx, t, c)?;
-        return bind_texture(cx, t, View::Storage(sampled_dim(n.dim, true), fmt));
+        return bind_level(cx, n, t, c, 0);
     }
     let texel = n.dim == Dim::Cube && uses(cx, Some(t.arg), None).texel;
     let ms = n.dim == Dim::D2Ms;
@@ -222,7 +211,23 @@ fn bind(cx: &mut dyn RuleCx, n: &Name, t: &Tex, c: &str) -> R<String> {
     if ms && st == S::Float {
         st = S::UnfilterableFloat;
     }
-    bind_texture(cx, t, View::Sampled(sampled_dim(n.dim, texel), st, ms))
+    bind_texture(cx, t, View::Sampled(sampled_dim(n.dim, texel), st, ms), 0)
+}
+
+/// Bind level `level` of a written texture (counted from a bound view's first level) as a storage texture.
+fn bind_level(cx: &mut dyn RuleCx, n: &Name, t: &Tex, c: &str, level: u32) -> R<String> {
+    if cx.stage() == MetalStage::Vertex {
+        return Err(tracked::refuse_row(
+            "vertex-stage-writes",
+            RefusalKind::NoExactLowering,
+            c.to_string(),
+            None,
+            "a vertex function writes a texture",
+            "WebGPU 8.1.1 bind group layout creation",
+        ));
+    }
+    let fmt = storage_format(cx, t, c)?;
+    bind_texture(cx, t, View::Storage(sampled_dim(n.dim, true), fmt), level)
 }
 
 // Queries ---------------------------------------------------------------------------------------------------------
@@ -234,8 +239,13 @@ fn query(cx: &mut dyn RuleCx, call: &CallSite<'_>, n: &Name, t: &Tex) -> R<Strin
     if call.args.len() != want {
         return Err(call_form(c, "an operand count"));
     }
-    let v = bind(cx, n, t, c)?;
     let storage = t.access == Access::Write;
+    if n.op == Op2::MipLevels && storage {
+        // The level count of the bound texture (a view's own) is variant state; a null texture's placeholder has one
+        // level.
+        return Ok(format!("{}u", levels(t).unwrap_or(1)));
+    }
+    let v = bind(cx, n, t, c)?;
     let lane = match n.op {
         Op2::Width => "x",
         Op2::Height => "y",
@@ -258,16 +268,7 @@ fn query(cx: &mut dyn RuleCx, call: &CallSite<'_>, n: &Name, t: &Tex) -> R<Strin
         }
         Op2::ArraySize => format!("textureNumLayers({})", v),
         Op2::Samples => format!("textureNumSamples({})", v),
-        Op2::MipLevels => {
-            if storage {
-                return Err(refuse(
-                    "texture-write-level",
-                    c,
-                    "the mipmap level count of a write-only texture: its WebGPU storage binding is one level",
-                ));
-            }
-            format!("textureNumLevels({})", v)
-        }
+        Op2::MipLevels => format!("textureNumLevels({})", v),
         _ => unreachable!(),
     })
 }
@@ -681,6 +682,27 @@ let h = e - 112;\n    if (h >= 31) {\n        return s | 0x7bffu;\n    }\n    if
 return s | (u32(h) << 10u) | (f >> 13u);\n    }\n    if (e == 0 || 126 - e >= 32) {\n        return s;\n    }\n    \
 return s | ((f | 0x800000u) >> u32(126 - e));\n}\n";
 
+/// A constant integer operand as the unsigned value of its width (a `uint` or `ushort` level).
+fn const_uint(m: &Module, v: Value) -> Option<u64> {
+    let Value::Const(c) = v else { return None };
+    let bits = match m.types.get(m.constant(c).ty) {
+        Type::Int(b) => *b,
+        _ => return None,
+    };
+    let x = const_int(m, v)? as u64;
+    Some(if bits >= 64 { x } else { x & ((1u64 << bits) - 1) })
+}
+
+/// A write: `textureStore` to the storage binding of the level written, under the bounds of MSL 4.1 section 6.13 ("A
+/// read from or write to a texture is out-of-bounds if and only if ... the level of detail argument is
+/// out-of-bounds"; "an out-of-bounds write to a texture is ignored"). The level is out of bounds when it is not below
+/// the mipmap level count of the bound texture, a view's own count from its first level. A level computed at run time
+/// selects among a storage binding of each level ([`crate::api::BindingSource::MetalTextureLevel`]); a constant level
+/// binds that level alone.
+///
+/// Without a bound texture at the slot the level count is not known: a constant level binds that level, and a level
+/// computed at run time selects level 0 alone, the one level of the executor's placeholder. The executor refuses a
+/// bound texture whose levels the variant's bindings do not cover.
 fn write(cx: &mut dyn RuleCx, call: &CallSite<'_>, n: &Name, t: &Tex) -> R<()> {
     let c = call.name;
     if n.depth {
@@ -700,15 +722,21 @@ fn write(cx: &mut dyn RuleCx, call: &CallSite<'_>, n: &Name, t: &Tex) -> R<()> {
     if n.elem == Elem::None {
         return Err(call_form(c, "no texel type"));
     }
-    if const_int(cx.module(), lod) != Some(0) {
-        return Err(refuse(
-            "texture-write-level",
-            c,
-            "a write to a mipmap level other than the constant 0: a WebGPU storage binding is one level, chosen when \
-             the bind group is made",
-        ));
+    let level = const_uint(cx.module(), lod);
+    let written: Vec<u32> = match (level, levels(t)) {
+        // A constant level out of range: the write is ignored.
+        (Some(l), Some(count)) if l >= count => return Ok(()),
+        (Some(l), _) => vec![u32::try_from(l).map_err(|_| call_form(c, "a level operand wider than 32 bits"))?],
+        (None, count) => {
+            let count = u32::try_from(count.unwrap_or(1))
+                .map_err(|_| refuse("texture-slot-mismatch", c, "a bound texture of more than 2^32 levels"))?;
+            (0..count).collect()
+        }
+    };
+    let mut views = Vec::new();
+    for &l in &written {
+        views.push((l, bind_level(cx, n, t, c, l)?));
     }
-    let v = bind(cx, n, t, c)?;
     let p = cx.fresh();
     let coord_e = cx.operand(coord)?;
     let coords = match n.dim {
@@ -716,26 +744,49 @@ fn write(cx: &mut dyn RuleCx, call: &CallSite<'_>, n: &Name, t: &Tex) -> R<()> {
         _ => coord_e,
     };
     cx.line(format!("let {}_c = {};", p, coords));
-    let mut cond = format!("all({}_c < textureDimensions({}))", p, v);
     let mut layer = String::new();
+    let mut extra = String::new();
     if let Some(f) = face {
         let fe = cx.operand(f)?;
         cx.line(format!("let {}_f = {};", p, fe));
-        cond = format!("{} && {}_f < 6u", cond, p);
+        extra = format!(" && {}_f < 6u", p);
         layer = format!(", {}_f", p);
     }
-    if let Some(s) = slice {
-        let se = cx.operand(s)?;
-        cx.line(format!("let {}_s = {};", p, se));
-        cond = format!("{} && {}_s < textureNumLayers({})", cond, p, v);
-        layer = format!(", {}_s", p);
-    }
+    let sliced = match slice {
+        Some(s) => {
+            let se = cx.operand(s)?;
+            cx.line(format!("let {}_s = {};", p, se));
+            layer = format!(", {}_s", p);
+            true
+        }
+        None => false,
+    };
     let val = cx.operand(value)?;
     cx.line(format!("let {}_v = {};", p, val));
-    // MSL 4.1 section 8.7: an out-of-bounds write is ignored.
-    cx.line(format!("if ({}) {{", cond));
     let stored = store_value(cx, t, n, &format!("{}_v", p), c)?;
-    cx.line(format!("textureStore({}, {}_c{}, {});", v, p, layer, stored));
+    cx.line(format!("let {}_x = {};", p, stored));
+    // Each level's own extent and layers bound the coordinates and the slice; an out-of-bounds write is ignored.
+    let store = |cx: &mut dyn RuleCx, v: &str| {
+        let mut cond = format!("all({}_c < textureDimensions({})){}", p, v, extra);
+        if sliced {
+            cond = format!("{} && {}_s < textureNumLayers({})", cond, p, v);
+        }
+        cx.line(format!("if ({}) {{", cond));
+        cx.line(format!("textureStore({}, {}_c{}, {}_x);", v, p, layer, p));
+        cx.line("}".into());
+    };
+    if level.is_some() {
+        store(cx, &views[0].1);
+        return Ok(());
+    }
+    let l = cx.operand(lod)?;
+    cx.line(format!("switch ({}) {{", l));
+    for (k, v) in &views {
+        cx.line(format!("case {}u: {{", k));
+        store(cx, v);
+        cx.line("}".into());
+    }
+    cx.line("default: {}".into());
     cx.line("}".into());
     Ok(())
 }

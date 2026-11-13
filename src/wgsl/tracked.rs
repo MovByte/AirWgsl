@@ -523,10 +523,10 @@ pub const ITEMS: &[Item] = &[
     Item {
         id: "texture-write-level",
         owner: None,
-        kind: RefusalKind::NoExactLowering,
-        summary: "a write-only texture's mipmap levels other than its bound level 0 (a write to another level, its \
-                  level count): a WebGPU storage binding is one level, chosen when the bind group is made",
-        reference: "WebGPU 6.1.3",
+        kind: RefusalKind::HostUnsupported,
+        summary: "a texture written at a level computed at run time whose levels, each a storage binding of its own (a \
+                  WebGPU storage binding is one level), exceed the host's storage texture limit for the stage",
+        reference: "WebGPU 8.2.1; MSL 6.13",
     },
     Item {
         id: "texture-write-rounding",
