@@ -428,3 +428,33 @@ pub fn early_fragment_tests(m: &Module, fi: usize, e: &EntryPoint, desc: &Pipeli
     }
     Ok(())
 }
+
+/// Raster order groups (`[[raster_order_group(n)]]` on a fragment function's color outputs, color inputs, textures
+/// and device buffers; AIR `air.raster_order_group`). The A10X reports none (D1
+/// `supportsRasterOrderGroups = false`), and what its driver does with a function that declares them, refuse the
+/// pipeline or build it without the ordering, is decided by its compiler back end (AGXCompilerCore in
+/// MTLCompilerService), which only the real compiler service can show (WebMetal packages G4 and G5). A WebGPU draw
+/// orders no overlapping fragments, so a lowering would drop the ordering the function asks for: the function is
+/// refused, as WebMetal's executor refuses the pipeline.
+pub fn raster_order_groups(m: &Module, fi: usize, e: &EntryPoint) -> R<()> {
+    let outputs = e.outputs.iter().filter_map(|o| o.raster_order_group.map(|g| ("a color output", g)));
+    let arguments = e.arguments.iter().filter_map(|a| match &a.role {
+        Role::RenderTarget { raster_order_group: Some(g), .. } => Some(("a color input", *g)),
+        Role::Texture { raster_order_group: Some(g), .. } => Some(("a texture", *g)),
+        Role::Buffer(b) | Role::IndirectBuffer(b) => b.raster_order_group.map(|g| ("a buffer", g)),
+        _ => None,
+    });
+    match outputs.chain(arguments).next() {
+        Some((what, group)) => Err(tracked::refuse(
+            "raster-order-group",
+            format!("raster_order_group({})", group),
+            loc(m, fi),
+            format!(
+                "{} in a raster order group: the A10X reports none, its driver's answer for such a function is its \
+                 compiler back end's (WebMetal packages G4 and G5), and a WebGPU draw has no fragment ordering",
+                what
+            ),
+        )),
+        None => Ok(()),
+    }
+}

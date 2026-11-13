@@ -419,8 +419,8 @@ fn prover_needs_exactly_lowered_positions() {
     note("prover-precise", dawn, "Metal");
 }
 
-/// The refusals: a type class Metal refuses, a raster order group (the A10X has none), `[[sample_mask]]` with a
-/// multisampled fetch.
+/// The refusals: a type class Metal refuses, a raster order group (the A10X reports none, and its driver's answer is
+/// its compiler's), `[[sample_mask]]` with a multisampled fetch.
 #[test]
 fn refusals() {
     let dir = case_dir("refusals");
@@ -438,7 +438,7 @@ fragment uint runused(V in [[stage_in]], uint c [[color(0)]]) { return 7u; }
     let r = pipeline(&bc, "rv", &bc, "rclass", &render_desc(R32UINT.metal, 3, 1, None)).unwrap_err();
     assert_eq!((item(&r), r.kind), ("fetch-format-class".to_string(), RefusalKind::RejectedByDevice), "{}", r);
     let r = pipeline(&bc, "rv", &bc, "rrog", &render_desc(R32UINT.metal, 3, 1, None)).unwrap_err();
-    assert_eq!((item(&r), r.kind), ("fetch-raster-order-group".to_string(), RefusalKind::RejectedByDevice), "{}", r);
+    assert_eq!((item(&r), r.kind), ("raster-order-group".to_string(), RefusalKind::NotImplemented), "{}", r);
     let r = pipeline(&bc, "rv", &bc, "rmask", &render_desc(R32UINT.metal, 3, 4, None)).unwrap_err();
     assert_eq!(item(&r), "fetch-sample-mask", "{}", r);
     // One sample: the mask is the pixel's coverage either way.

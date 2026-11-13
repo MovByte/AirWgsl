@@ -6,8 +6,8 @@
 //! A color input reads the current value of the fragment's own pixel in color attachment `m`, or of its own sample
 //! for a multisampled attachment, including the values earlier primitives of the same draw wrote (MSL 4.1 section
 //! 5.2.3.4; D2 question `5.9-fetch-per-sample`). The A10X supports it (D1 `supportsProgrammableBlending = true`) and
-//! has no raster order groups (D1 `supportsRasterOrderGroups = false`), so a color input in a raster order group is
-//! rejected as on the device.
+//! reports no raster order groups (D1 `supportsRasterOrderGroups = false`); a color input in a raster order group is
+//! refused with the function's other raster order groups ([`crate::stage::fragment::raster_order_groups`]).
 //!
 //! The value a color input of type `T` reads from an attachment of pixel format `F` was measured on real Metal (Apple
 //! M4, macOS 27.0.1) for every pixel of a 16 x 16 attachment filled with arbitrary texels, for 12 formats x 14 types
@@ -133,20 +133,12 @@ fn color_input(cx: &mut dyn StageCx, arg: u32, record: &Argument) -> R<String> {
     let m = cx.module();
     let fi = cx.function();
     let at = loc(m, fi);
-    let Role::RenderTarget { index, raster_order_group } = &record.role else { unreachable!("air.render_target") };
+    let Role::RenderTarget { index, .. } = &record.role else { unreachable!("air.render_target") };
     let color = match index {
         Slot::Value(v) => *v as u64,
         Slot::Constant(_) => return Err(tracked::refuse_family("function-constants", "air.render_target", at)),
     };
     let construct = format!("color({})", color);
-    if raster_order_group.is_some() {
-        return Err(tracked::refuse(
-            "fetch-raster-order-group",
-            construct,
-            at,
-            "a color input in a raster order group: the A10X has no raster order groups",
-        ));
-    }
     let ty = m.functions[fi].args[arg as usize].ty;
     let (n, el) = match m.types.get(ty) {
         Type::Vector { len, elem, .. } => (*len, *elem),

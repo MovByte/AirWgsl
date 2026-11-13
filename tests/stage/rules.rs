@@ -83,6 +83,41 @@ struct M { uint c [[color(0)]]; uint m [[sample_mask]]; };
 fragment M f_mask(V in [[stage_in]]) { M m; m.c = 1; m.m = 5; return m; }
 "#;
 
+const ORDERED: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct V { float4 pos [[position]]; };
+vertex V vt(uint vid [[vertex_id]]) { V o; o.pos = float4(0, 0, 0, 1); return o; }
+struct O { float4 c [[color(0), raster_order_group(0)]]; };
+fragment O f_output(V in [[stage_in]]) { O o; o.c = float4(0.5f); return o; }
+fragment float4 f_texture(V in [[stage_in]],
+                          texture2d<float, access::read_write> t [[texture(0), raster_order_group(0)]]) {
+    float4 c = t.read(uint2(in.pos.xy));
+    t.write(c + 0.25f, uint2(in.pos.xy));
+    return c;
+}
+fragment float4 f_buffer(V in [[stage_in]], device float *b [[buffer(0), raster_order_group(1)]]) {
+    b[0] += 1.0f;
+    return float4(b[0]);
+}
+fragment float4 f_plain(V in [[stage_in]]) { return float4(0.5f); }
+"#;
+
+/// A raster order group on a color output, a texture or a buffer is refused, as WebMetal's executor refuses the
+/// pipeline: the A10X reports none, and whether its driver refuses such a function or drops the ordering is its
+/// compiler back end's answer. The same vertex function with an unordered fragment function compiles.
+#[test]
+fn raster_order_groups_are_refused() {
+    let dir = case_dir("raster-order-groups");
+    let bc = air(&dir, ORDERED, "metal3.1");
+    let desc = render_desc(125, 3, 1, None);
+    for fs in ["f_output", "f_texture", "f_buffer"] {
+        let e = pipeline(&bc, "vt", fs, &desc, &host()).unwrap_err();
+        assert_eq!((e.kind, item(&e).as_str()), (RefusalKind::NotImplemented, "raster-order-group"), "{}: {}", fs, e);
+    }
+    pipeline(&bc, "vt", "f_plain", &desc, &host()).unwrap_or_else(|e| panic!("{}", e));
+}
+
 fn desc_with(pf: u64, f: impl FnOnce(&mut RenderState)) -> PipelineDesc {
     let mut d = render_desc(pf, 3, 1, None);
     if let PipelineKind::Render(r) = &mut d.kind {

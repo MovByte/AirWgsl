@@ -398,6 +398,8 @@ pub struct Buffer {
     pub buffer_size: Option<u32>,
     /// `air.struct_type_info`: the pointee's layout when it is a struct.
     pub struct_info: Option<StructInfo>,
+    /// `air.raster_order_group`: a fragment function's device buffer in a raster order group.
+    pub raster_order_group: Option<u32>,
 }
 
 /// An imageblock argument.
@@ -632,7 +634,8 @@ fn buffer(m: &Module, items: &mut Items<'_>, role: &str) -> Result<Buffer, Refus
     let address_space = items.int("air.address_space");
     let buffer_size = items.int("air.buffer_size");
     let struct_info = struct_info(m, items, 0)?;
-    Ok(Buffer { location, access, address_space, buffer_size, struct_info })
+    let raster_order_group = items.int("air.raster_order_group");
+    Ok(Buffer { location, access, address_space, buffer_size, struct_info, raster_order_group })
 }
 
 /// The builtin input keys (arguments that are values the stage provides).

@@ -466,6 +466,7 @@ pub fn lower(cx: &Ctx, layout: &mut Layout) -> Result<Interface, Refusal> {
     let f = &m.functions[fi];
     let mut it = Interface::default();
     let stage = cx.stage;
+    crate::stage::fragment::raster_order_groups(m, fi, e)?;
     let (mut gid, mut lid, mut wid, mut nwg, mut lidx) = (false, false, false, false, false);
     let (mut vid, mut iid, mut pos, mut ff, mut sid) = (false, false, false, false, false);
     let compute: Option<&ComputeState> = match &cx.desc.kind {

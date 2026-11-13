@@ -273,6 +273,17 @@ pub const ITEMS: &[Item] = &[
         reference: "plan 5.9",
     },
     Item {
+        id: "raster-order-group",
+        owner: None,
+        kind: RefusalKind::NotImplemented,
+        summary: "a fragment function's color output, color input, texture or buffer in a raster order group: the \
+                  A10X reports none (D1 supportsRasterOrderGroups = false), and whether its driver refuses such a \
+                  pipeline or builds it without the ordering is its compiler back end's answer (AGXCompilerCore in \
+                  MTLCompilerService), which only the real compiler service can show (WebMetal packages G4 and G5); \
+                  a WebGPU draw orders no overlapping fragments",
+        reference: "plan 5.7; WebMetal profile/ipados-17.7.11-21H461-a10x.toml and host/src/pipeline/render.rs",
+    },
+    Item {
         id: "fetch-format-class",
         owner: None,
         kind: RefusalKind::RejectedByDevice,
@@ -280,14 +291,6 @@ pub const ITEMS: &[Item] = &[
                   attachment's pixel format (Metal: \"input of type ... is not compatible with a ... color \
                   attachment\")",
         reference: "MSL 5.2.3.4; measured on Metal (src/fetch/mod.rs)",
-    },
-    Item {
-        id: "fetch-raster-order-group",
-        owner: None,
-        kind: RefusalKind::RejectedByDevice,
-        summary: "a color input in a raster order group: the A10X has no raster order groups (D1 \
-                  supportsRasterOrderGroups = false)",
-        reference: "MSL 5.2.3.4; WebMetal profile/ipados-17.7.11-21H461-a10x.toml",
     },
     Item {
         id: "fetch-attachment",
