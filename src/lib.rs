@@ -23,6 +23,7 @@ pub mod passes;
 pub mod reflect;
 pub mod stage;
 pub mod sync;
+pub mod tess;
 pub mod tex;
 pub mod wgsl;
 
