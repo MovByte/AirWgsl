@@ -69,7 +69,7 @@ fn tessellator_equals_metal_over_the_v1_sweeps() {
 fn v1_sweeps_are_complete() {
     let Some(reference) = stage::reference() else { return };
     let counts: Vec<usize> = CASES.iter().map(|c| draw::load(&reference, c).len()).collect();
-    assert_eq!(counts, vec![120, 120, 35, 8, 4]);
+    assert_eq!(counts, vec![120, 120, 36, 8, 4]);
     let _ = Expected::default();
     let _ = Draw::default();
 }
