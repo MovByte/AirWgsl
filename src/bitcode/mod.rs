@@ -123,6 +123,18 @@ pub fn parse_bitcode(data: &[u8]) -> Result<Module> {
     let mut reader = Reader::new(bc);
     reader.m.wrapper = wrapper;
     reader.read_file()?;
+    // The bitcode's type table, with the pointee types typed-pointer bitcode records, for the values whose
+    // `bitcode_type` names an entry of it. A finished type table defines every entry it declares.
+    let types = std::mem::take(&mut reader.bc_types);
+    let contained = std::mem::take(&mut reader.bc_contained);
+    reader.m.bitcode_types = types
+        .into_iter()
+        .zip(contained)
+        .map(|(ty, contained)| match ty {
+            Some(ty) => Ok(crate::ir::BitcodeType { ty, contained }),
+            None => Err(malformed(None, "type table entry never defined")),
+        })
+        .collect::<Result<_>>()?;
     Ok(reader.m)
 }
 
